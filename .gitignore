@@ -1,2 +1,5 @@
 bin/
 obj/
+docs/
+dotnet-install.sh
+packages-microsoft-prod.deb

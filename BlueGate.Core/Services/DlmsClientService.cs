@@ -64,7 +64,9 @@ public class DlmsClientService
             _media.Open();
 
             var register = new GXDLMSRegister(obisCode);
-            _client.Write(register, 2, value);
+#pragma warning disable CS0618 // GXDLMSClient.Write obsolete in current package version
+            _client.Write(register, value, DataType.None, ObjectType.Register, 2);
+#pragma warning restore CS0618
         }
         catch (Exception ex)
         {
