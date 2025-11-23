@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlueGate.Core", "BlueGate.Core\BlueGate.Core.csproj", "{FE9E30FE-F378-4883-B4B0-9F8DCFA03E17}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlueGate.Server", "BlueGate.Server\BlueGate.Server.csproj", "{FD2EF38E-E24C-407C-9B40-AF2BD674669B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlueGate.Tests", "BlueGate.Tests\BlueGate.Tests.csproj", "{0402EE7E-21E6-4478-88CA-D9767B09E325}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FE9E30FE-F378-4883-B4B0-9F8DCFA03E17}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FE9E30FE-F378-4883-B4B0-9F8DCFA03E17}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FE9E30FE-F378-4883-B4B0-9F8DCFA03E17}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FE9E30FE-F378-4883-B4B0-9F8DCFA03E17}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FD2EF38E-E24C-407C-9B40-AF2BD674669B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FD2EF38E-E24C-407C-9B40-AF2BD674669B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FD2EF38E-E24C-407C-9B40-AF2BD674669B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FD2EF38E-E24C-407C-9B40-AF2BD674669B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0402EE7E-21E6-4478-88CA-D9767B09E325}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0402EE7E-21E6-4478-88CA-D9767B09E325}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0402EE7E-21E6-4478-88CA-D9767B09E325}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0402EE7E-21E6-4478-88CA-D9767B09E325}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
