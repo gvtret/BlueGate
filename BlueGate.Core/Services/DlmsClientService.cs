@@ -47,6 +47,7 @@ public class DlmsClientService
         catch (Exception ex)
         {
             _logger.LogError(ex, "DLMS write error");
+            throw;
         }
     }
 }

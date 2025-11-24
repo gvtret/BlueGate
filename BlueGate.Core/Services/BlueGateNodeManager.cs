@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Extensions.Logging;
 using Opc.Ua;
 using Opc.Ua.Configuration;
 using Opc.Ua.Server;
@@ -10,13 +11,22 @@ namespace BlueGate.Core.Services;
 public class BlueGateNodeManager : CustomNodeManager2
 {
     private readonly MappingService _mappingService;
+    private readonly DlmsClientService _dlmsClientService;
+    private readonly ILogger<BlueGateNodeManager> _logger;
 
     public const string NamespaceUri = "urn:bluegate:opcua:nodes";
 
-    public BlueGateNodeManager(IServerInternal server, ApplicationConfiguration configuration, MappingService mappingService)
+    public BlueGateNodeManager(
+        IServerInternal server,
+        ApplicationConfiguration configuration,
+        MappingService mappingService,
+        DlmsClientService dlmsClientService,
+        ILogger<BlueGateNodeManager> logger)
         : base(server, configuration, new[] { NamespaceUri })
     {
         _mappingService = mappingService;
+        _dlmsClientService = dlmsClientService;
+        _logger = logger;
         SystemContext.NodeIdFactory = this;
     }
 
@@ -53,7 +63,44 @@ public class BlueGateNodeManager : CustomNodeManager2
                 Timestamp = DateTime.UtcNow
             };
 
+            variable.OnSimpleWriteValue = OnWriteValue;
+
             AddPredefinedNode(SystemContext, variable);
+        }
+    }
+
+    private ServiceResult OnWriteValue(ISystemContext context, NodeState node, ref object value)
+    {
+        if (node.NodeId is null)
+            return StatusCodes.BadNodeIdUnknown;
+
+        if (node is not BaseVariableState variable)
+        {
+            _logger.LogWarning("Write rejected for unsupported node type {NodeId}", node.NodeId);
+            return StatusCodes.BadNodeIdInvalid;
+        }
+
+        var obisCode = _mappingService.MapToDlms(node.NodeId);
+        if (string.IsNullOrWhiteSpace(obisCode))
+        {
+            _logger.LogWarning("Write rejected for unmapped node {NodeId}", node.NodeId);
+            return StatusCodes.BadNodeIdUnknown;
+        }
+
+        try
+        {
+            variable.Value = value;
+            variable.Timestamp = DateTime.UtcNow;
+            variable.ClearChangeMasks(context, false);
+
+            _dlmsClientService.WriteAsync(obisCode, value).GetAwaiter().GetResult();
+
+            return ServiceResult.Good;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "DLMS write failed for node {NodeId} mapped to OBIS {ObisCode}", node.NodeId, obisCode);
+            return new ServiceResult(StatusCodes.BadUnexpectedError, ex.Message);
         }
     }
 

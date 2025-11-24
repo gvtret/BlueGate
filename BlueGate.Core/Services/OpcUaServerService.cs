@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Opc.Ua;
 using Opc.Ua.Configuration;
 using Opc.Ua.Server;
@@ -15,11 +16,15 @@ public class OpcUaServerService
     private ApplicationInstance? _application;
     private BlueGateServer? _server;
     private readonly MappingService _mappingService;
+    private readonly DlmsClientService _dlmsClientService;
+    private readonly ILoggerFactory _loggerFactory;
     private ushort? _namespaceIndex;
 
-    public OpcUaServerService(MappingService mappingService)
+    public OpcUaServerService(MappingService mappingService, DlmsClientService dlmsClientService, ILoggerFactory loggerFactory)
     {
         _mappingService = mappingService;
+        _dlmsClientService = dlmsClientService;
+        _loggerFactory = loggerFactory;
     }
 
     public async Task StartAsync()
@@ -46,7 +51,7 @@ public class OpcUaServerService
 
         await _application.CheckApplicationInstanceCertificatesAsync(true, null, CancellationToken.None);
 
-        _server = new BlueGateServer(_mappingService);
+        _server = new BlueGateServer(_mappingService, _dlmsClientService, _loggerFactory);
         await _application.StartAsync(_server);
 
         _namespaceIndex = _server.NodeManager?.ServerNamespaceIndex;
