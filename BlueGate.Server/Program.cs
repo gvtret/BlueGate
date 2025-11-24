@@ -2,6 +2,8 @@ using Serilog;
 using Serilog.Events;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using BlueGate.Core.Configuration;
 using BlueGate.Core.Services;
 
@@ -16,6 +18,7 @@ Log.Logger = new LoggerConfiguration()
     .CreateLogger();
 
 builder.Services.Configure<DlmsClientOptions>(builder.Configuration.GetSection("DlmsClient"));
+builder.Services.AddSingleton<IDlmsTransport, GuruxDlmsTransport>();
 builder.Services.AddSingleton<DlmsClientService>();
 builder.Services.AddSingleton<OpcUaServerService>();
 builder.Services.AddSingleton<MappingService>();
