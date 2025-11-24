@@ -1,6 +1,7 @@
+using BlueGate.Core.Models;
 using Gurux.DLMS.Enums;
 using Gurux.DLMS.Objects.Enums;
-using BlueGate.Core.Models;
+using Opc.Ua;
 
 namespace BlueGate.Core.Configuration;
 
@@ -64,7 +65,9 @@ public class DlmsClientOptions
             ObisCode = "1.0.1.8.0.255",
             OpcNodeId = "ns=2;s=ActiveEnergy",
             ObjectType = ObjectType.Register,
-            AttributeIndex = 2
+            AttributeIndex = 2,
+            BuiltInType = BuiltInType.Double,
+            InitialValue = 0d
         }
     };
 }

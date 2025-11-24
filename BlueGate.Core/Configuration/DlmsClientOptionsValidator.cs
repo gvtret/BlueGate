@@ -33,12 +33,21 @@ public class DlmsClientOptionsValidator : IValidateOptions<DlmsClientOptions>
             return;
         }
 
-        var invalidProfiles = options.Profiles
-            .Select((profile, index) => (profile, index))
-            .Where(tuple => IsMissingRequiredFields(tuple.profile))
-            .Select(tuple => $"Profiles[{tuple.index}] must include both ObisCode and OpcNodeId.");
+        foreach (var (profile, index) in options.Profiles.Select((profile, index) => (profile, index)))
+        {
+            if (IsMissingRequiredFields(profile))
+            {
+                failures.Add($"Profiles[{index}] must include both ObisCode and OpcNodeId.");
+                continue;
+            }
 
-        failures.AddRange(invalidProfiles);
+            MappingProfileDefaults.EnsureDefaults(profile);
+
+            if (!MappingProfileDefaults.HasDataType(profile))
+            {
+                failures.Add($"Profiles[{index}] must include a supported OPC UA data type (BuiltInType or DataTypeNodeId).");
+            }
+        }
     }
 
     private static void ValidateSecurity(DlmsClientOptions options, List<string> failures)

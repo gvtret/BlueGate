@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using BlueGate.Core.Models;
 using Microsoft.Extensions.Logging;
 using Opc.Ua;
 using Opc.Ua.Configuration;
@@ -183,6 +184,11 @@ public class BlueGateNodeManager : CustomNodeManager2
                 : new NodeId(parsedNodeId.Identifier, namespaceIndex);
 
             var identifier = parsedNodeId.Identifier?.ToString() ?? profile.OpcNodeId;
+            var dataType = ResolveDataType(profile);
+            var initialValue = MappingProfileDefaults.CoerceInitialValue(profile)
+                               ?? (profile.BuiltInType is BuiltInType builtIn
+                                   ? MappingProfileDefaults.GetDefaultValue(builtIn)
+                                   : null);
             var variable = new BaseDataVariableState(_rootFolder)
             {
                 NodeId = nodeId,
@@ -190,10 +196,11 @@ public class BlueGateNodeManager : CustomNodeManager2
                 DisplayName = new LocalizedText(identifier),
                 Description = new LocalizedText($"DLMS OBIS: {profile.ObisCode}"),
                 TypeDefinitionId = VariableTypeIds.BaseDataVariableType,
-                DataType = DataTypeIds.BaseDataType,
+                DataType = dataType,
                 ValueRank = ValueRanks.Scalar,
                 AccessLevel = AccessLevels.CurrentReadOrWrite,
                 UserAccessLevel = AccessLevels.CurrentReadOrWrite,
+                Value = initialValue,
                 StatusCode = StatusCodes.Good,
                 Timestamp = DateTime.UtcNow
             };
@@ -203,5 +210,47 @@ public class BlueGateNodeManager : CustomNodeManager2
             AddPredefinedNode(context, variable);
             _managedNodeIds.Add(variable.NodeId);
         }
+    }
+
+    private static NodeId ResolveDataType(MappingProfile profile)
+    {
+        if (!string.IsNullOrWhiteSpace(profile.DataTypeNodeId))
+        {
+            return NodeId.Parse(profile.DataTypeNodeId);
+        }
+
+        if (profile.BuiltInType is BuiltInType builtInType)
+        {
+            return builtInType switch
+            {
+                BuiltInType.Boolean => DataTypeIds.Boolean,
+                BuiltInType.SByte => DataTypeIds.SByte,
+                BuiltInType.Byte => DataTypeIds.Byte,
+                BuiltInType.Int16 => DataTypeIds.Int16,
+                BuiltInType.UInt16 => DataTypeIds.UInt16,
+                BuiltInType.Int32 => DataTypeIds.Int32,
+                BuiltInType.UInt32 => DataTypeIds.UInt32,
+                BuiltInType.Int64 => DataTypeIds.Int64,
+                BuiltInType.UInt64 => DataTypeIds.UInt64,
+                BuiltInType.Float => DataTypeIds.Float,
+                BuiltInType.Double => DataTypeIds.Double,
+                BuiltInType.String => DataTypeIds.String,
+                BuiltInType.DateTime => DataTypeIds.DateTime,
+                BuiltInType.Guid => DataTypeIds.Guid,
+                BuiltInType.NodeId => DataTypeIds.NodeId,
+                BuiltInType.ExpandedNodeId => DataTypeIds.ExpandedNodeId,
+                BuiltInType.StatusCode => DataTypeIds.StatusCode,
+                BuiltInType.QualifiedName => DataTypeIds.QualifiedName,
+                BuiltInType.LocalizedText => DataTypeIds.LocalizedText,
+                BuiltInType.ExtensionObject => DataTypeIds.Structure,
+                BuiltInType.XmlElement => DataTypeIds.XmlElement,
+                BuiltInType.ByteString => DataTypeIds.ByteString,
+                BuiltInType.Variant => DataTypeIds.BaseDataType,
+                BuiltInType.DataValue => DataTypeIds.DataValue,
+                _ => DataTypeIds.BaseDataType
+            };
+        }
+
+        throw new InvalidOperationException($"Mapping profile for {profile.ObisCode} does not define an OPC UA data type.");
     }
 }
