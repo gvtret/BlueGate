@@ -1,4 +1,5 @@
 using Gurux.DLMS.Enums;
+using BlueGate.Core.Models;
 
 namespace BlueGate.Core.Configuration;
 
@@ -33,4 +34,16 @@ public class DlmsClientOptions
 
     /// <summary>How many data chunks to read at once.</summary>
     public int ReceiveCount { get; set; } = 1;
+
+    /// <summary>Collection of DLMS to OPC UA mapping profiles to read/write.</summary>
+    public List<MappingProfile> Profiles { get; set; } = new()
+    {
+        new()
+        {
+            ObisCode = "1.0.1.8.0.255",
+            OpcNodeId = "ns=2;s=ActiveEnergy",
+            ObjectType = ObjectType.Register,
+            AttributeIndex = 2
+        }
+    };
 }

@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using System.Linq;
 using BlueGate.Core.Configuration;
 using BlueGate.Core.Models;
 using Gurux.Common;
@@ -22,9 +24,17 @@ public class GuruxDlmsTransport : IDlmsTransport
 
     public async Task<IEnumerable<CosemObject>> ReadAllAsync(
         DlmsClientOptions options,
+        IEnumerable<MappingProfile> profiles,
         CancellationToken cancellationToken = default)
     {
         var results = new List<CosemObject>();
+        var targetProfiles = profiles.ToList();
+
+        if (targetProfiles.Count == 0)
+        {
+            _logger.LogWarning("No DLMS mapping profiles configured; skipping read.");
+            return results;
+        }
 
         await using var media = new AsyncDisposableMedia(CreateMedia(options));
         var client = CreateClient(options);
@@ -34,15 +44,20 @@ public class GuruxDlmsTransport : IDlmsTransport
             await OpenAsync(media.Media, cancellationToken).ConfigureAwait(false);
             await EstablishAssociationAsync(client, media.Media, options, cancellationToken).ConfigureAwait(false);
 
-            var register = new GXDLMSRegister("1.0.1.8.0.255");
-            var value = await ReadValueAsync(client, media.Media, register, 2, options, cancellationToken).ConfigureAwait(false);
-
-            results.Add(new CosemObject
+            foreach (var profile in targetProfiles)
             {
-                ObisCode = register.LogicalName,
-                Value = value,
-                Timestamp = DateTime.UtcNow
-            });
+                var target = CreateDlmsObject(profile);
+                var value = await ReadValueAsync(client, media.Media, target, profile.AttributeIndex, options, cancellationToken)
+                    .ConfigureAwait(false);
+
+                results.Add(new CosemObject
+                {
+                    ObisCode = target.LogicalName,
+                    Name = profile.OpcNodeId,
+                    Value = value,
+                    Timestamp = DateTime.UtcNow
+                });
+            }
 
             await ReleaseAssociationAsync(client, media.Media, options, cancellationToken).ConfigureAwait(false);
         }
@@ -61,9 +76,16 @@ public class GuruxDlmsTransport : IDlmsTransport
     public async Task WriteAsync(
         DlmsClientOptions options,
         string obisCode,
+        IEnumerable<MappingProfile> profiles,
         object value,
         CancellationToken cancellationToken = default)
     {
+        var profile = profiles.FirstOrDefault(p => p.ObisCode == obisCode);
+        if (profile is null)
+        {
+            throw new ArgumentException($"OBIS code {obisCode} is not configured for DLMS access.", nameof(obisCode));
+        }
+
         await using var media = new AsyncDisposableMedia(CreateMedia(options));
         var client = CreateClient(options);
 
@@ -72,9 +94,9 @@ public class GuruxDlmsTransport : IDlmsTransport
             await OpenAsync(media.Media, cancellationToken).ConfigureAwait(false);
             await EstablishAssociationAsync(client, media.Media, options, cancellationToken).ConfigureAwait(false);
 
-            var register = new GXDLMSRegister(obisCode);
+            var target = CreateDlmsObject(profile);
 #pragma warning disable CS0618
-            var writeFrames = client.Write(register, value, DataType.None, ObjectType.Register, 2);
+            var writeFrames = client.Write(target, value, DataType.None, profile.ObjectType, profile.AttributeIndex);
 #pragma warning restore CS0618
             await SendRequestFramesAsync(client, media.Media, writeFrames, options, cancellationToken).ConfigureAwait(false);
 
@@ -98,6 +120,15 @@ public class GuruxDlmsTransport : IDlmsTransport
         password: options.Password,
         interfaceType: options.InterfaceType
     );
+
+    private static GXDLMSObject CreateDlmsObject(MappingProfile profile)
+    {
+        var target = GXDLMSClient.CreateObject(profile.ObjectType)
+            ?? throw new InvalidOperationException($"Unsupported DLMS object type: {profile.ObjectType}");
+
+        target.LogicalName = profile.ObisCode;
+        return target;
+    }
 
     private GXNet CreateMedia(DlmsClientOptions options) => new(NetworkType.Tcp, options.Host, options.Port)
     {

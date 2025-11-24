@@ -10,15 +10,18 @@ public class DlmsClientService
 {
     private readonly DlmsClientOptions _options;
     private readonly IDlmsTransport _transport;
+    private readonly IReadOnlyCollection<MappingProfile> _profiles;
     private readonly ILogger<DlmsClientService> _logger;
 
     public DlmsClientService(
         IOptions<DlmsClientOptions> options,
         IDlmsTransport transport,
+        MappingService mappingService,
         ILogger<DlmsClientService> logger)
     {
         _options = options.Value;
         _transport = transport;
+        _profiles = mappingService.GetProfiles();
         _logger = logger;
     }
 
@@ -26,7 +29,7 @@ public class DlmsClientService
     {
         try
         {
-            return await _transport.ReadAllAsync(_options, cancellationToken).ConfigureAwait(false);
+            return await _transport.ReadAllAsync(_options, _profiles, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -39,7 +42,7 @@ public class DlmsClientService
     {
         try
         {
-            await _transport.WriteAsync(_options, obisCode, value, cancellationToken).ConfigureAwait(false);
+            await _transport.WriteAsync(_options, obisCode, _profiles, value, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

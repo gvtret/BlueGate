@@ -1,4 +1,6 @@
+using BlueGate.Core.Configuration;
 using BlueGate.Core.Models;
+using Microsoft.Extensions.Options;
 
 namespace BlueGate.Core.Services;
 
@@ -6,12 +8,12 @@ public class MappingService
 {
     private readonly List<MappingProfile> _profiles;
 
-    public MappingService()
+    public MappingService(IOptions<DlmsClientOptions> options)
     {
-        _profiles = new List<MappingProfile>
-        {
-            new() { ObisCode = "1.0.1.8.0.255", OpcNodeId = "ns=2;s=ActiveEnergy" }
-        };
+        var configuredProfiles = options.Value.Profiles;
+        _profiles = configuredProfiles is { Count: > 0 }
+            ? new List<MappingProfile>(configuredProfiles)
+            : new List<MappingProfile>();
     }
 
     public string? MapToOpcUa(string obisCode)
