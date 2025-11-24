@@ -54,4 +54,11 @@ public class BlueGateWorker : BackgroundService
         _logger.LogInformation("🔵 BlueGate gateway service started...");
         await _engine.SyncLoopAsync(stoppingToken);
     }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("🔻 BlueGate gateway service stopping...");
+        await _engine.StopAsync(cancellationToken);
+        await base.StopAsync(cancellationToken);
+    }
 }

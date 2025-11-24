@@ -17,23 +17,35 @@ public class ConversionEngine
     {
         await _opcua.StartAsync();
 
-        while (!token.IsCancellationRequested)
+        try
         {
-            var cosemObjects = await _dlms.ReadAllAsync(token);
-
-            foreach (var obj in cosemObjects)
+            while (!token.IsCancellationRequested)
             {
-                var nodeId = _mapper.MapToOpcUa(obj.ObisCode);
-                if (nodeId is not null)
-                    await _opcua.UpdateNodeAsync(new Models.OpcUaNode
-                    {
-                        NodeId = nodeId,
-                        Value = obj.Value,
-                        LastUpdate = DateTime.UtcNow
-                    });
-            }
+                var cosemObjects = await _dlms.ReadAllAsync(token);
 
-            await Task.Delay(TimeSpan.FromSeconds(10), token);
+                foreach (var obj in cosemObjects)
+                {
+                    var nodeId = _mapper.MapToOpcUa(obj.ObisCode);
+                    if (nodeId is not null)
+                        await _opcua.UpdateNodeAsync(new Models.OpcUaNode
+                        {
+                            NodeId = nodeId,
+                            Value = obj.Value,
+                            LastUpdate = DateTime.UtcNow
+                        });
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(10), token);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            await StopAsync(CancellationToken.None);
         }
     }
+
+    public Task StopAsync(CancellationToken cancellationToken = default) => _opcua.StopAsync(cancellationToken);
 }
