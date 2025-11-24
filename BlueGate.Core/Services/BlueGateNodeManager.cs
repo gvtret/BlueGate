@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Opc.Ua;
 using Opc.Ua.Configuration;
@@ -56,7 +58,18 @@ public class BlueGateNodeManager : CustomNodeManager2
         }
     }
 
+    private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(30);
+
     private ServiceResult OnWriteValue(ISystemContext context, NodeState node, ref object value)
+    {
+        return OnWriteValueAsync(context, node, value, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    private async Task<ServiceResult> OnWriteValueAsync(
+        ISystemContext context,
+        NodeState node,
+        object value,
+        CancellationToken cancellationToken)
     {
         if (node.NodeId is null)
             return StatusCodes.BadNodeIdUnknown;
@@ -74,19 +87,30 @@ public class BlueGateNodeManager : CustomNodeManager2
             return StatusCodes.BadNodeIdUnknown;
         }
 
+        using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        writeCts.CancelAfter(WriteTimeout);
+
         try
         {
+            await _dlmsClientService.WriteAsync(obisCode, value, writeCts.Token).ConfigureAwait(false);
+
             variable.Value = value;
             variable.Timestamp = DateTime.UtcNow;
+            variable.StatusCode = StatusCodes.Good;
             variable.ClearChangeMasks(context, false);
 
-            _dlmsClientService.WriteAsync(obisCode, value).GetAwaiter().GetResult();
-
             return ServiceResult.Good;
+        }
+        catch (OperationCanceledException ex) when (writeCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "DLMS write timed out for node {NodeId} mapped to OBIS {ObisCode}", node.NodeId, obisCode);
+            variable.StatusCode = StatusCodes.BadTimeout;
+            return StatusCodes.BadTimeout;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "DLMS write failed for node {NodeId} mapped to OBIS {ObisCode}", node.NodeId, obisCode);
+            variable.StatusCode = StatusCodes.BadUnexpectedError;
             return new ServiceResult(StatusCodes.BadUnexpectedError, ex.Message);
         }
     }
