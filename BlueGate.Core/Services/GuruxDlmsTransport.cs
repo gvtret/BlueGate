@@ -1,12 +1,17 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using BlueGate.Core.Configuration;
 using BlueGate.Core.Models;
 using Gurux.Common;
 using Gurux.DLMS;
 using Gurux.DLMS.Enums;
 using Gurux.DLMS.Objects;
+using Gurux.DLMS.Objects.Enums;
+using Gurux.DLMS.Secure;
 using Gurux.Net;
 using Microsoft.Extensions.Logging;
 using Task = System.Threading.Tasks.Task;
@@ -36,6 +41,7 @@ public class GuruxDlmsTransport : IDlmsTransport
             return results;
         }
 
+        EnsureSecurityConfiguration(options);
         await using var media = new AsyncDisposableMedia(CreateMedia(options));
         var client = CreateClient(options);
 
@@ -67,6 +73,7 @@ public class GuruxDlmsTransport : IDlmsTransport
         }
         finally
         {
+            PersistInvocationCounter(client, options);
             await CloseAsync(media.Media, cancellationToken).ConfigureAwait(false);
         }
 
@@ -86,6 +93,7 @@ public class GuruxDlmsTransport : IDlmsTransport
             throw new ArgumentException($"OBIS code {obisCode} is not configured for DLMS access.", nameof(obisCode));
         }
 
+        EnsureSecurityConfiguration(options);
         await using var media = new AsyncDisposableMedia(CreateMedia(options));
         var client = CreateClient(options);
 
@@ -108,18 +116,24 @@ public class GuruxDlmsTransport : IDlmsTransport
         }
         finally
         {
+            PersistInvocationCounter(client, options);
             await CloseAsync(media.Media, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private GXDLMSClient CreateClient(DlmsClientOptions options) => new(
-        useLogicalNameReferencing: true,
-        clientAddress: options.ClientAddress,
-        serverAddress: options.ServerAddress,
-        authentication: options.Authentication,
-        password: options.Password,
-        interfaceType: options.InterfaceType
-    );
+    private GXDLMSClient CreateClient(DlmsClientOptions options)
+    {
+        var client = new GXDLMSClient(
+            useLogicalNameReferencing: true,
+            clientAddress: options.ClientAddress,
+            serverAddress: options.ServerAddress,
+            authentication: options.Authentication,
+            password: options.Password,
+            interfaceType: options.InterfaceType);
+
+        ConfigureCiphering(client, options);
+        return client;
+    }
 
     private static GXDLMSObject CreateDlmsObject(MappingProfile profile)
     {
@@ -276,6 +290,165 @@ public class GuruxDlmsTransport : IDlmsTransport
             client.GetData(buffer, reply, notify);
         }
         while (reply.MoreData != RequestTypes.None);
+    }
+
+    private void EnsureSecurityConfiguration(DlmsClientOptions options)
+    {
+        if (options.SecuritySuite == SecuritySuite.Suite0)
+        {
+            _logger.LogInformation("Using DLMS security suite {SecuritySuite} (no ciphering configured).", options.SecuritySuite);
+            return;
+        }
+
+        var missing = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(options.BlockCipherKey))
+        {
+            missing.Add(nameof(options.BlockCipherKey));
+        }
+
+        if (string.IsNullOrWhiteSpace(options.AuthenticationKey))
+        {
+            missing.Add(nameof(options.AuthenticationKey));
+        }
+
+        if (string.IsNullOrWhiteSpace(options.SystemTitle))
+        {
+            missing.Add(nameof(options.SystemTitle));
+        }
+
+        if (string.IsNullOrWhiteSpace(options.InvocationCounterPath))
+        {
+            missing.Add(nameof(options.InvocationCounterPath));
+        }
+
+        if (missing.Count > 0)
+        {
+            var error = $"Security suite {options.SecuritySuite} requires: {string.Join(", ", missing)}.";
+            _logger.LogError(error);
+            throw new InvalidOperationException(error);
+        }
+    }
+
+    private void ConfigureCiphering(GXDLMSClient client, DlmsClientOptions options)
+    {
+        var ciphering = GetCiphering(client) ?? new GXCiphering();
+
+        ciphering.SecuritySuite = options.SecuritySuite;
+        ciphering.Security = options.SecuritySuite == SecuritySuite.Suite0
+            ? Security.None
+            : Security.AuthenticationEncryption;
+        ciphering.BlockCipherKey = ParseOptionalHex(options.BlockCipherKey);
+        ciphering.AuthenticationKey = ParseOptionalHex(options.AuthenticationKey);
+        ciphering.SystemTitle = ParseOptionalHex(options.SystemTitle);
+
+        if (!string.IsNullOrWhiteSpace(options.InvocationCounterPath) && options.SecuritySuite != SecuritySuite.Suite0)
+        {
+            ciphering.InvocationCounter = LoadInvocationCounter(options.InvocationCounterPath);
+        }
+
+        if (ciphering.SystemTitle is { Length: > 0 })
+        {
+            SetSourceSystemTitle(client, ciphering.SystemTitle);
+        }
+
+        SetCiphering(client, ciphering);
+        _logger.LogInformation("Configured DLMS ciphering: suite {SecuritySuite}, security {Security}.", ciphering.SecuritySuite, ciphering.Security);
+    }
+
+    private static byte[]? ParseOptionalHex(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return Convert.FromHexString(value);
+    }
+
+    private uint LoadInvocationCounter(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                var content = File.ReadAllText(path).Trim();
+                if (uint.TryParse(content, NumberStyles.Integer, CultureInfo.InvariantCulture, out var counter))
+                {
+                    return counter;
+                }
+
+                _logger.LogWarning("Invocation counter file {Path} contained invalid data; starting from zero.", path);
+            }
+            else
+            {
+                _logger.LogInformation("Invocation counter file {Path} not found; starting from zero.", path);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read invocation counter from {Path}; starting from zero.", path);
+        }
+
+        return 0;
+    }
+
+    private void PersistInvocationCounter(GXDLMSClient client, DlmsClientOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.InvocationCounterPath))
+        {
+            return;
+        }
+
+        if (GetCiphering(client) is not GXCiphering ciphering)
+        {
+            return;
+        }
+
+        try
+        {
+            var directory = Path.GetDirectoryName(options.InvocationCounterPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            File.WriteAllText(options.InvocationCounterPath, ciphering.InvocationCounter.ToString(CultureInfo.InvariantCulture));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist DLMS invocation counter to {Path}.", options.InvocationCounterPath);
+        }
+    }
+
+    private GXCiphering? GetCiphering(GXDLMSClient client)
+    {
+        var cipherProperty = client.Settings.GetType().GetProperty("Cipher", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return cipherProperty?.GetValue(client.Settings) as GXCiphering;
+    }
+
+    private void SetCiphering(GXDLMSClient client, GXCiphering ciphering)
+    {
+        var cipherProperty = client.Settings.GetType().GetProperty("Cipher", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (cipherProperty is null)
+        {
+            _logger.LogWarning("GXDLMS client does not expose a Cipher property; security settings will not be applied.");
+            return;
+        }
+
+        cipherProperty.SetValue(client.Settings, ciphering);
+    }
+
+    private void SetSourceSystemTitle(GXDLMSClient client, byte[] systemTitle)
+    {
+        var systemTitleProperty = client.Settings.GetType().GetProperty("SourceSystemTitle", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (systemTitleProperty is null)
+        {
+            _logger.LogWarning("GXDLMS client does not expose a writable SourceSystemTitle; ciphering system title was not applied.");
+            return;
+        }
+
+        systemTitleProperty.SetValue(client.Settings, systemTitle);
     }
 
     private sealed class AsyncDisposableMedia : IAsyncDisposable

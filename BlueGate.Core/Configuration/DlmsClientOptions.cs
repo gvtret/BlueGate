@@ -1,4 +1,5 @@
 using Gurux.DLMS.Enums;
+using Gurux.DLMS.Objects.Enums;
 using BlueGate.Core.Models;
 
 namespace BlueGate.Core.Configuration;
@@ -25,6 +26,21 @@ public class DlmsClientOptions
 
     /// <summary>Password or shared secret for authentication.</summary>
     public string? Password { get; set; }
+
+    /// <summary>Security suite used for DLMS/COSEM ciphering.</summary>
+    public SecuritySuite SecuritySuite { get; set; } = SecuritySuite.Suite0;
+
+    /// <summary>Hex-encoded block cipher key for secured associations.</summary>
+    public string? BlockCipherKey { get; set; }
+
+    /// <summary>Hex-encoded authentication key for secured associations.</summary>
+    public string? AuthenticationKey { get; set; }
+
+    /// <summary>Hex-encoded client system title.</summary>
+    public string? SystemTitle { get; set; }
+
+    /// <summary>Path to a persisted invocation counter value.</summary>
+    public string? InvocationCounterPath { get; set; }
 
     /// <summary>Interface type for the media (HDLC/TCP-UDP).</summary>
     public InterfaceType InterfaceType { get; set; } = InterfaceType.HDLC;
