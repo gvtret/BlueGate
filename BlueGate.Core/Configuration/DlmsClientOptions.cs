@@ -25,6 +25,9 @@ public class DlmsClientOptions
     /// <summary>Authentication mechanism to use.</summary>
     public Authentication Authentication { get; set; } = Authentication.None;
 
+    /// <summary>Security mode used when establishing an association.</summary>
+    public Security Security { get; set; } = Security.None;
+
     /// <summary>Password or shared secret for authentication.</summary>
     public string? Password { get; set; }
 
