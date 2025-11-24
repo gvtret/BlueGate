@@ -19,7 +19,7 @@ public class ConversionEngine
 
         while (!token.IsCancellationRequested)
         {
-            var cosemObjects = await _dlms.ReadAllAsync();
+            var cosemObjects = await _dlms.ReadAllAsync(token);
 
             foreach (var obj in cosemObjects)
             {

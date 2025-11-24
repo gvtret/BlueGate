@@ -1,10 +1,12 @@
-﻿using Serilog;
+using Serilog;
 using Serilog.Events;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using BlueGate.Core.Configuration;
 using BlueGate.Core.Services;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
 
 // Настройка Serilog
 Log.Logger = new LoggerConfiguration()
@@ -13,6 +15,7 @@ Log.Logger = new LoggerConfiguration()
     .WriteTo.Console() // теперь доступен
     .CreateLogger();
 
+builder.Services.Configure<DlmsClientOptions>(builder.Configuration.GetSection("DlmsClient"));
 builder.Services.AddSingleton<DlmsClientService>();
 builder.Services.AddSingleton<OpcUaServerService>();
 builder.Services.AddSingleton<MappingService>();
