@@ -1,5 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using BlueGate.Core.Configuration;
 using BlueGate.Core.Models;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Opc.Ua;
 
@@ -7,18 +11,27 @@ namespace BlueGate.Core.Services;
 
 public class MappingService
 {
-    private readonly List<MappingProfile> _profiles;
+    private readonly object _lock = new();
+    private readonly IOptionsMonitor<DlmsClientOptions> _optionsMonitor;
+    private readonly ILogger<MappingService> _logger;
+    private List<MappingProfile> _profiles;
 
-    public MappingService(IOptions<DlmsClientOptions> options)
+    public event EventHandler? ProfilesChanged;
+
+    public MappingService(IOptionsMonitor<DlmsClientOptions> optionsMonitor, ILogger<MappingService> logger)
     {
-        var configuredProfiles = options.Value.Profiles;
-        _profiles = configuredProfiles is { Count: > 0 }
-            ? new List<MappingProfile>(configuredProfiles)
-            : new List<MappingProfile>();
+        _optionsMonitor = optionsMonitor;
+        _logger = logger;
+        _profiles = LoadProfiles(optionsMonitor.CurrentValue);
+
+        _optionsMonitor.OnChange(options => UpdateProfiles(options));
     }
 
     public string? MapToOpcUa(string obisCode)
-        => _profiles.FirstOrDefault(m => m.ObisCode == obisCode)?.OpcNodeId;
+    {
+        var profiles = GetProfiles();
+        return profiles.FirstOrDefault(m => m.ObisCode == obisCode)?.OpcNodeId;
+    }
 
     public string? MapToDlms(string nodeId)
     {
@@ -40,7 +53,7 @@ public class MappingService
         if (identifier is null)
             return null;
 
-        foreach (var profile in _profiles)
+        foreach (var profile in GetProfiles())
         {
             try
             {
@@ -57,5 +70,42 @@ public class MappingService
         return null;
     }
 
-    public IReadOnlyCollection<MappingProfile> GetProfiles() => _profiles.AsReadOnly();
+    public IReadOnlyCollection<MappingProfile> GetProfiles()
+    {
+        lock (_lock)
+        {
+            return _profiles.AsReadOnly();
+        }
+    }
+
+    private void UpdateProfiles(DlmsClientOptions options)
+    {
+        var updatedProfiles = LoadProfiles(options);
+
+        lock (_lock)
+        {
+            _profiles = updatedProfiles;
+        }
+
+        ProfilesChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private List<MappingProfile> LoadProfiles(DlmsClientOptions options)
+    {
+        var profiles = options.Profiles ?? new List<MappingProfile>();
+
+        var validProfiles = profiles
+            .Where(profile => !string.IsNullOrWhiteSpace(profile.ObisCode)
+                              && !string.IsNullOrWhiteSpace(profile.OpcNodeId))
+            .ToList();
+
+        if (validProfiles.Count == 0)
+        {
+            _logger.LogInformation(
+                "No mapping profiles configured or all were invalid. Applying defaults for DLMS to OPC UA mapping.");
+            validProfiles.AddRange(DlmsClientOptions.DefaultProfiles);
+        }
+
+        return validProfiles;
+    }
 }

@@ -17,10 +17,11 @@ public class DlmsClientTests
             Timestamp = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
         };
 
-        var options = Options.Create(new DlmsClientOptions());
-        var mappingService = new MappingService(options);
+        var options = new DlmsClientOptions();
+        var optionsMonitor = new TestOptionsMonitor<DlmsClientOptions>(options);
+        var mappingService = new MappingService(optionsMonitor, NullLogger<MappingService>.Instance);
         var client = new DlmsClientService(
-            options,
+            optionsMonitor,
             new FakeDlmsTransport(new[] { expected }),
             mappingService,
             NullLogger<DlmsClientService>.Instance);
@@ -56,4 +57,30 @@ internal sealed class FakeDlmsTransport : IDlmsTransport
         object value,
         CancellationToken cancellationToken = default) =>
         Task.CompletedTask;
+}
+
+internal sealed class TestOptionsMonitor<T> : IOptionsMonitor<T>
+{
+    public TestOptionsMonitor(T currentValue)
+    {
+        CurrentValue = currentValue;
+    }
+
+    public T CurrentValue { get; private set; }
+
+    public T Get(string? name) => CurrentValue;
+
+    public IDisposable OnChange(Action<T, string?> listener)
+    {
+        return NullDisposable.Instance;
+    }
+
+    private sealed class NullDisposable : IDisposable
+    {
+        public static readonly NullDisposable Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
 }

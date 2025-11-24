@@ -36,7 +36,12 @@ public class DlmsClientOptions
     public int ReceiveCount { get; set; } = 1;
 
     /// <summary>Collection of DLMS to OPC UA mapping profiles to read/write.</summary>
-    public List<MappingProfile> Profiles { get; set; } = new()
+    public List<MappingProfile> Profiles { get; set; } = CreateDefaultProfiles();
+
+    /// <summary>Default mapping profiles used when configuration does not specify any.</summary>
+    public static IReadOnlyCollection<MappingProfile> DefaultProfiles { get; } = CreateDefaultProfiles();
+
+    private static List<MappingProfile> CreateDefaultProfiles() => new()
     {
         new()
         {

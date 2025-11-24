@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using BlueGate.Core.Configuration;
 using BlueGate.Core.Services;
 
@@ -17,7 +18,10 @@ Log.Logger = new LoggerConfiguration()
     .WriteTo.Console() // теперь доступен
     .CreateLogger();
 
-builder.Services.Configure<DlmsClientOptions>(builder.Configuration.GetSection("DlmsClient"));
+builder.Services.AddOptions<DlmsClientOptions>()
+    .Bind(builder.Configuration.GetSection("DlmsClient"))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<DlmsClientOptions>, DlmsClientOptionsValidator>();
 builder.Services.AddSingleton<IDlmsTransport, GuruxDlmsTransport>();
 builder.Services.AddSingleton<DlmsClientService>();
 builder.Services.AddSingleton<OpcUaServerService>();
