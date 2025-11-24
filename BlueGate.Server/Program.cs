@@ -25,9 +25,19 @@ builder.Services.AddSingleton<IValidateOptions<DlmsClientOptions>, DlmsClientOpt
 builder.Services.AddOptions<OpcUaOptions>()
     .Bind(builder.Configuration.GetSection("OpcUa"))
     .ValidateOnStart();
+builder.Services.AddSingleton<IDlmsAuthenticationService, DefaultDlmsAuthenticationService>();
 builder.Services.AddSingleton<IDlmsTransport, GuruxDlmsTransport>();
 builder.Services.AddSingleton<DlmsClientService>();
-builder.Services.AddSingleton<OpcUaServerService>();
+builder.Services.AddSingleton<OpcUaServerService>(provider =>
+{
+    var options = provider.GetRequiredService<IOptionsMonitor<OpcUaOptions>>();
+    var dlmsOptions = provider.GetRequiredService<IOptionsMonitor<DlmsClientOptions>>();
+    var logger = provider.GetRequiredService<ILogger<OpcUaServerService>>();
+    var nodeManagerLogger = provider.GetRequiredService<ILogger<BlueGateNodeManager>>();
+    var dlmsClient = provider.GetRequiredService<DlmsClientService>();
+    var mappingService = provider.GetRequiredService<MappingService>();
+    return new OpcUaServerService(options, dlmsOptions, logger, nodeManagerLogger, dlmsClient, mappingService);
+});
 builder.Services.AddSingleton<MappingService>();
 builder.Services.AddHostedService<BlueGateWorker>();
 

@@ -1,256 +1,158 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using BlueGate.Core.Models;
 using Microsoft.Extensions.Logging;
 using Opc.Ua;
-using Opc.Ua.Configuration;
 using Opc.Ua.Server;
 
-namespace BlueGate.Core.Services;
-
-public class BlueGateNodeManager : CustomNodeManager2
+namespace BlueGate.Core.Services
 {
-    private readonly object _addressSpaceLock = new();
-    private readonly IServerInternal _server;
-    private readonly MappingService _mappingService;
-    private readonly DlmsClientService _dlmsClientService;
-    private readonly ILogger<BlueGateNodeManager> _logger;
-    private readonly List<NodeId> _managedNodeIds = new();
-    private FolderState? _rootFolder;
-    private ushort? _namespaceIndex;
-
-    public const string NamespaceUri = "urn:bluegate:opcua:nodes";
-
-    public BlueGateNodeManager(
-        IServerInternal server,
-        ApplicationConfiguration configuration,
-        MappingService mappingService,
-        DlmsClientService dlmsClientService,
-        ILogger<BlueGateNodeManager> logger)
-        : base(server, configuration, new[] { NamespaceUri })
+    public class BlueGateNodeManager : CustomNodeManager2
     {
-        _server = server;
-        _mappingService = mappingService;
-        _dlmsClientService = dlmsClientService;
-        _logger = logger;
-        SystemContext.NodeIdFactory = this;
+        private readonly ILogger<BlueGateNodeManager> _logger;
+        private readonly Dictionary<string, DataVariableState> _nodes = new Dictionary<string, DataVariableState>();
+        private readonly Dictionary<string, ObisMappingProfile> _opcNodeIdToProfileMap = new Dictionary<string, ObisMappingProfile>();
+        private readonly DlmsClientService _dlmsClient;
+        private readonly MappingService _mappingService;
 
-        _mappingService.ProfilesChanged += OnProfilesChanged;
-    }
-
-    public ushort ServerNamespaceIndex => NamespaceIndexes.FirstOrDefault();
-
-    public override void CreateAddressSpace(IDictionary<NodeId, IList<IReference>> externalReferences)
-    {
-        base.CreateAddressSpace(externalReferences);
-
-        lock (_addressSpaceLock)
+        public BlueGateNodeManager(IServerInternal server, ApplicationConfiguration configuration, DlmsClientService dlmsClient, MappingService mappingService, ILogger<BlueGateNodeManager> logger, string namespaceUri)
+            : base(server, configuration, namespaceUri)
         {
-            _namespaceIndex ??= ServerNamespaceIndex;
-
-            var folderId = new NodeId("BlueGate", _namespaceIndex.Value);
-            _rootFolder = CreateFolder(null, folderId, "BlueGate", "BlueGate", externalReferences);
-            AddPredefinedNode(SystemContext, _rootFolder);
-
-            RebuildNodes(_server.DefaultSystemContext);
-        }
-    }
-
-    private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(30);
-
-    private ServiceResult OnWriteValue(ISystemContext context, NodeState node, ref object value)
-    {
-        return OnWriteValueAsync(context, node, value, CancellationToken.None).GetAwaiter().GetResult();
-    }
-
-    private async Task<ServiceResult> OnWriteValueAsync(
-        ISystemContext context,
-        NodeState node,
-        object value,
-        CancellationToken cancellationToken)
-    {
-        if (node.NodeId is null)
-            return StatusCodes.BadNodeIdUnknown;
-
-        if (node is not BaseVariableState variable)
-        {
-            _logger.LogWarning("Write rejected for unsupported node type {NodeId}", node.NodeId);
-            return StatusCodes.BadNodeIdInvalid;
+            _logger = logger;
+            _dlmsClient = dlmsClient;
+            _mappingService = mappingService;
         }
 
-        var obisCode = _mappingService.MapToDlms(node.NodeId);
-        if (string.IsNullOrWhiteSpace(obisCode))
+        public override void CreateAddressSpace(IDictionary<NodeId, IList<IReference>> externalReferences)
         {
-            _logger.LogWarning("Write rejected for unmapped node {NodeId}", node.NodeId);
-            return StatusCodes.BadNodeIdUnknown;
-        }
-
-        using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        writeCts.CancelAfter(WriteTimeout);
-
-        try
-        {
-            await _dlmsClientService.WriteAsync(obisCode, value, writeCts.Token).ConfigureAwait(false);
-
-            variable.Value = value;
-            variable.Timestamp = DateTime.UtcNow;
-            variable.StatusCode = StatusCodes.Good;
-            variable.ClearChangeMasks(context, false);
-
-            return ServiceResult.Good;
-        }
-        catch (OperationCanceledException ex) when (writeCts.IsCancellationRequested)
-        {
-            _logger.LogWarning(ex, "DLMS write timed out for node {NodeId} mapped to OBIS {ObisCode}", node.NodeId, obisCode);
-            variable.StatusCode = StatusCodes.BadTimeout;
-            return StatusCodes.BadTimeout;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "DLMS write failed for node {NodeId} mapped to OBIS {ObisCode}", node.NodeId, obisCode);
-            variable.StatusCode = StatusCodes.BadUnexpectedError;
-            return new ServiceResult(StatusCodes.BadUnexpectedError, ex.Message);
-        }
-    }
-
-    private FolderState CreateFolder(NodeState? parent, NodeId nodeId, string browseName, string displayName, IDictionary<NodeId, IList<IReference>> externalReferences)
-    {
-        var folder = new FolderState(parent)
-        {
-            NodeId = nodeId,
-            BrowseName = new QualifiedName(browseName, _namespaceIndex ?? ServerNamespaceIndex),
-            DisplayName = new LocalizedText(displayName),
-            TypeDefinitionId = ObjectTypeIds.FolderType,
-            EventNotifier = EventNotifiers.None
-        };
-
-        if (parent == null)
-        {
-            folder.AddReference(ReferenceTypeIds.Organizes, true, ObjectIds.ObjectsFolder);
-            AddRootReference(externalReferences, ObjectIds.ObjectsFolder, ReferenceTypeIds.Organizes, false, folder.NodeId);
-        }
-        else
-        {
-            parent.AddReference(ReferenceTypeIds.Organizes, false, folder.NodeId);
-            folder.AddReference(ReferenceTypeIds.Organizes, true, parent.NodeId);
-        }
-
-        return folder;
-    }
-
-    private static void AddRootReference(IDictionary<NodeId, IList<IReference>> externalReferences, NodeId sourceId, NodeId referenceTypeId, bool isInverse, NodeId targetId)
-    {
-        if (!externalReferences.TryGetValue(sourceId, out var references))
-        {
-            references = new List<IReference>();
-            externalReferences[sourceId] = references;
-        }
-
-        references.Add(new NodeStateReference(referenceTypeId, isInverse, targetId));
-    }
-
-    private void OnProfilesChanged(object? sender, EventArgs e)
-    {
-        if (!_server.IsRunning || _rootFolder == null)
-            return;
-
-        lock (_addressSpaceLock)
-        {
-            RebuildNodes(_server.DefaultSystemContext);
-        }
-    }
-
-    private void RebuildNodes(ServerSystemContext context)
-    {
-        if (_rootFolder == null)
-            return;
-
-        foreach (var nodeId in _managedNodeIds)
-        {
-            DeleteNode(context, nodeId);
-        }
-
-        _managedNodeIds.Clear();
-
-        foreach (var profile in _mappingService.GetProfiles())
-        {
-            var parsedNodeId = NodeId.Parse(profile.OpcNodeId);
-            var namespaceIndex = _namespaceIndex ?? parsedNodeId.NamespaceIndex;
-            var nodeId = parsedNodeId.NamespaceIndex == namespaceIndex
-                ? parsedNodeId
-                : new NodeId(parsedNodeId.Identifier, namespaceIndex);
-
-            var identifier = parsedNodeId.Identifier?.ToString() ?? profile.OpcNodeId;
-            var dataType = ResolveDataType(profile);
-            var initialValue = MappingProfileDefaults.CoerceInitialValue(profile)
-                               ?? (profile.BuiltInType is BuiltInType builtIn
-                                   ? MappingProfileDefaults.GetDefaultValue(builtIn)
-                                   : null);
-            var variable = new BaseDataVariableState(_rootFolder)
+            lock (Lock)
             {
-                NodeId = nodeId,
-                BrowseName = new QualifiedName(identifier, namespaceIndex),
-                DisplayName = new LocalizedText(identifier),
-                Description = new LocalizedText($"DLMS OBIS: {profile.ObisCode}"),
+                base.CreateAddressSpace(externalReferences);
+                RebuildAddressSpace();
+            }
+        }
+
+        public virtual void RebuildAddressSpace()
+        {
+            lock (Lock)
+            {
+                foreach (var node in _nodes.Values)
+                {
+                    RemovePredefinedNode(SystemContext, node, false);
+                }
+                _nodes.Clear();
+                _opcNodeIdToProfileMap.Clear();
+
+                foreach (var profile in _mappingService.GetObisProfiles())
+                {
+                    _opcNodeIdToProfileMap[profile.OpcNodeId] = profile;
+                    CreateVariable(profile.OpcNodeId, profile.InitialValue, profile.BuiltInType);
+                }
+            }
+        }
+
+        public void UpdateNodeValue(string nodeId, object value, BuiltInType builtInType)
+        {
+            lock (Lock)
+            {
+                if (_nodes.TryGetValue(nodeId, out var node))
+                {
+                    node.Value = value;
+                    node.Timestamp = DateTime.UtcNow;
+                    node.ClearChangeMasks(SystemContext, false);
+                }
+                else
+                {
+                    _logger.LogWarning("Node {NodeId} not found, creating new node.", nodeId);
+                    CreateVariable(nodeId, value, builtInType);
+                }
+            }
+        }
+
+        private void CreateVariable(string nodeId, object initialValue, BuiltInType builtInType)
+        {
+            var variable = new DataVariableState(null)
+            {
+                SymbolicName = nodeId,
+                ReferenceTypeId = ReferenceTypeIds.Organizes,
                 TypeDefinitionId = VariableTypeIds.BaseDataVariableType,
-                DataType = dataType,
-                ValueRank = ValueRanks.Scalar,
-                AccessLevel = AccessLevels.CurrentReadOrWrite,
-                UserAccessLevel = AccessLevels.CurrentReadOrWrite,
+                NodeId = new NodeId(nodeId, NamespaceIndex),
+                BrowseName = new QualifiedName(nodeId, NamespaceIndex),
+                DisplayName = new LocalizedText("en", nodeId),
                 Value = initialValue,
-                StatusCode = StatusCodes.Good,
-                Timestamp = DateTime.UtcNow
+                DataType = GetDataTypeId(builtInType),
+                ValueRank = ValueRanks.Scalar,
+                AccessLevel = AccessLevels.CurrentRead | AccessLevels.CurrentWrite,
+                UserAccessLevel = AccessLevels.CurrentRead | AccessLevels.CurrentWrite,
+                Timestamp = DateTime.UtcNow,
+                OnWriteValue = OnWriteValue
             };
 
-            variable.OnSimpleWriteValue = OnWriteValue;
-
-            AddPredefinedNode(context, variable);
-            _managedNodeIds.Add(variable.NodeId);
-        }
-    }
-
-    private static NodeId ResolveDataType(MappingProfile profile)
-    {
-        if (!string.IsNullOrWhiteSpace(profile.DataTypeNodeId))
-        {
-            return NodeId.Parse(profile.DataTypeNodeId);
+            AddPredefinedNode(SystemContext, variable);
+            _nodes.Add(nodeId, variable);
         }
 
-        if (profile.BuiltInType is BuiltInType builtInType)
+        private NodeId GetDataTypeId(BuiltInType builtInType)
         {
-            return builtInType switch
+            switch (builtInType)
             {
-                BuiltInType.Boolean => DataTypeIds.Boolean,
-                BuiltInType.SByte => DataTypeIds.SByte,
-                BuiltInType.Byte => DataTypeIds.Byte,
-                BuiltInType.Int16 => DataTypeIds.Int16,
-                BuiltInType.UInt16 => DataTypeIds.UInt16,
-                BuiltInType.Int32 => DataTypeIds.Int32,
-                BuiltInType.UInt32 => DataTypeIds.UInt32,
-                BuiltInType.Int64 => DataTypeIds.Int64,
-                BuiltInType.UInt64 => DataTypeIds.UInt64,
-                BuiltInType.Float => DataTypeIds.Float,
-                BuiltInType.Double => DataTypeIds.Double,
-                BuiltInType.String => DataTypeIds.String,
-                BuiltInType.DateTime => DataTypeIds.DateTime,
-                BuiltInType.Guid => DataTypeIds.Guid,
-                BuiltInType.NodeId => DataTypeIds.NodeId,
-                BuiltInType.ExpandedNodeId => DataTypeIds.ExpandedNodeId,
-                BuiltInType.StatusCode => DataTypeIds.StatusCode,
-                BuiltInType.QualifiedName => DataTypeIds.QualifiedName,
-                BuiltInType.LocalizedText => DataTypeIds.LocalizedText,
-                BuiltInType.ExtensionObject => DataTypeIds.Structure,
-                BuiltInType.XmlElement => DataTypeIds.XmlElement,
-                BuiltInType.ByteString => DataTypeIds.ByteString,
-                BuiltInType.Variant => DataTypeIds.BaseDataType,
-                BuiltInType.DataValue => DataTypeIds.DataValue,
-                _ => DataTypeIds.BaseDataType
-            };
+                case BuiltInType.Boolean:
+                    return DataTypeIds.Boolean;
+                case BuiltInType.SByte:
+                    return DataTypeIds.SByte;
+                case BuiltInType.Byte:
+                    return DataTypeIds.Byte;
+                case BuiltInType.Int16:
+                    return DataTypeIds.Int16;
+                case BuiltInType.UInt16:
+                    return DataTypeIds.UInt16;
+                case BuiltInType.Int32:
+                    return DataTypeIds.Int32;
+                case BuiltInType.UInt32:
+                    return DataTypeIds.UInt32;
+                case BuiltInType.Int64:
+                    return DataTypeIds.Int64;
+                case BuiltInType.UInt64:
+                    return DataTypeIds.UInt64;
+                case BuiltInType.Float:
+                    return DataTypeIds.Float;
+                case BuiltInType.Double:
+                    return DataTypeIds.Double;
+                case BuiltInType.String:
+                    return DataTypeIds.String;
+                case BuiltInType.DateTime:
+                    return DataTypeIds.DateTime;
+                default:
+                    return DataTypeIds.BaseDataType;
+            }
         }
 
-        throw new InvalidOperationException($"Mapping profile for {profile.ObisCode} does not define an OPC UA data type.");
+        private ServiceResult OnWriteValue(ISystemContext context, NodeState node, NumericRange indexRange, QualifiedName dataEncoding, ref object value, ref StatusCode statusCode, ref DateTime timestamp)
+        {
+            var variable = node as DataVariableState;
+            var nodeId = variable.SymbolicName;
+
+            if (!_opcNodeIdToProfileMap.TryGetValue(nodeId, out var profile))
+            {
+                return ServiceResult.Create(StatusCodes.BadNodeIdUnknown, "OBIS profile not found for this node.");
+            }
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await _dlmsClient.WriteObjectAsync(profile, value);
+                    variable.StatusCode = StatusCodes.Good;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to write value to DLMS device for node {NodeId}", nodeId);
+                    variable.StatusCode = StatusCodes.Bad;
+                }
+                variable.Timestamp = DateTime.UtcNow;
+                variable.ClearChangeMasks(SystemContext, false);
+            });
+
+            return ServiceResult.Create(StatusCodes.Uncertain, "Write operation is in progress.");
+        }
     }
 }

@@ -1,66 +1,95 @@
 using BlueGate.Core.Configuration;
-using BlueGate.Core.Models;
 using BlueGate.Core.Services;
+using Gurux.DLMS;
+using Gurux.DLMS.Client;
+using Gurux.DLMS.Objects;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using Xunit;
 
-public class DlmsClientTests
+public class DlmsClientServiceTests
 {
-    [Fact]
-    public async Task Should_Read_Data_From_DLMS()
+    private readonly FakeDlmsTransport _transport;
+    private readonly DlmsClientService _service;
+
+    public DlmsClientServiceTests()
     {
-        var expected = new CosemObject
+        _transport = new FakeDlmsTransport();
+        var options = new DlmsClientOptions
         {
-            ObisCode = "1.0.1.8.0.255",
-            Value = 123.45,
-            Timestamp = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+            Profiles = new List<ObisMappingProfile>
+            {
+                new ObisMappingProfile { ObisCode = "1.0.1.8.0.255", AttributeIndex = 2, ObjectType = ObjectType.Register }
+            }
         };
-
-        var options = new DlmsClientOptions();
         var optionsMonitor = new TestOptionsMonitor<DlmsClientOptions>(options);
-        var mappingService = new MappingService(optionsMonitor, NullLogger<MappingService>.Instance);
-        var client = new DlmsClientService(
-            optionsMonitor,
-            new FakeDlmsTransport(new[] { expected }),
-            mappingService,
-            NullLogger<DlmsClientService>.Instance);
 
-        var data = await client.ReadAllAsync();
-
-        var cosemObject = Assert.Single(data);
-        Assert.Equal(expected.ObisCode, cosemObject.ObisCode);
-        Assert.Equal(expected.Value, cosemObject.Value);
-        Assert.Equal(expected.Timestamp, cosemObject.Timestamp);
+        _service = new DlmsClientService(_transport, optionsMonitor, NullLogger<DlmsClientService>.Instance);
     }
-}
 
-internal sealed class FakeDlmsTransport : IDlmsTransport
-{
-    private readonly IEnumerable<CosemObject> _objects;
-
-    public FakeDlmsTransport(IEnumerable<CosemObject> objects)
+    [Fact]
+    public async Task ReadAllObjectsAsync_ShouldReturnCorrectValues()
     {
-        _objects = objects;
+        // Arrange
+        var register = new GXDLMSRegister("1.0.1.8.0.255");
+        register.Value = 123.45;
+        _transport.Client.Objects.Add(register);
+        _transport.IsOpen = true;
+
+        // Act
+        var result = await _service.ReadAllObjectsAsync();
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.True(result.ContainsKey("1.0.1.8.0.255"));
+        Assert.Equal(123.45, result["1.0.1.8.0.255"]);
     }
 
-    public Task<IEnumerable<CosemObject>> ReadAllAsync(
-        DlmsClientOptions options,
-        IEnumerable<MappingProfile> profiles,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult(_objects);
+    [Fact]
+    public async Task WriteObjectAsync_ShouldWriteValue()
+    {
+        // Arrange
+        var register = new GXDLMSRegister("1.0.1.8.0.255");
+        _transport.Client.Objects.Add(register);
+        _transport.IsOpen = true;
+        var profile = new ObisMappingProfile { ObisCode = "1.0.1.8.0.255", AttributeIndex = 2, ObjectType = ObjectType.Register };
 
-    public Task WriteAsync(
-        DlmsClientOptions options,
-        string obisCode,
-        IEnumerable<MappingProfile> profiles,
-        object value,
-        CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
+        // Act
+        await _service.WriteObjectAsync(profile, 543.21);
+
+        // Assert
+        Assert.Equal(543.21, register.Value);
+    }
 }
 
-internal sealed class TestOptionsMonitor<T> : IOptionsMonitor<T>
+public class FakeDlmsTransport : IDlmsTransport
 {
+    public GXDLMSClient Client { get; } = new GXDLMSClient();
+    public bool IsOpen { get; set; }
+
+    public Task ConnectAsync()
+    {
+        IsOpen = true;
+        return Task.CompletedTask;
+    }
+
+    public Task DisconnectAsync()
+    {
+        IsOpen = false;
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+    }
+}
+
+public sealed class TestOptionsMonitor<T> : IOptionsMonitor<T>
+{
+    private Action<T, string> _listener;
+
     public TestOptionsMonitor(T currentValue)
     {
         CurrentValue = currentValue;
@@ -68,17 +97,22 @@ internal sealed class TestOptionsMonitor<T> : IOptionsMonitor<T>
 
     public T CurrentValue { get; private set; }
 
-    public T Get(string? name) => CurrentValue;
+    public T Get(string name) => CurrentValue;
 
-    public IDisposable OnChange(Action<T, string?> listener)
+    public IDisposable OnChange(Action<T, string> listener)
     {
-        return NullDisposable.Instance;
+        _listener = listener;
+        return new NullDisposable();
+    }
+
+    public void Change(T value)
+    {
+        CurrentValue = value;
+        _listener?.Invoke(CurrentValue, null);
     }
 
     private sealed class NullDisposable : IDisposable
     {
-        public static readonly NullDisposable Instance = new();
-
         public void Dispose()
         {
         }

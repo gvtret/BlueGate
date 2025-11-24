@@ -1,124 +1,55 @@
-using System.Linq;
-using System.Collections.Generic;
-using BlueGate.Core.Models;
-using Gurux.DLMS.Enums;
-using Gurux.DLMS.Objects.Enums;
 using Microsoft.Extensions.Options;
+using System.ComponentModel.DataAnnotations;
 
-namespace BlueGate.Core.Configuration;
-
-/// <summary>
-/// Validates that DLMS client options include complete mapping profiles.
-/// </summary>
-public class DlmsClientOptionsValidator : IValidateOptions<DlmsClientOptions>
+namespace BlueGate.Core.Configuration
 {
-    public ValidateOptionsResult Validate(string? name, DlmsClientOptions options)
+    public class DlmsClientOptionsValidator : IValidateOptions<DlmsClientOptions>
     {
-        var failures = new List<string>();
-
-        ValidateProfiles(options, failures);
-        ValidateSecurity(options, failures);
-
-        return failures.Count > 0
-            ? ValidateOptionsResult.Fail(failures)
-            : ValidateOptionsResult.Success;
-    }
-
-    private static bool IsMissingRequiredFields(MappingProfile profile) =>
-        string.IsNullOrWhiteSpace(profile.ObisCode) || string.IsNullOrWhiteSpace(profile.OpcNodeId);
-
-    private static void ValidateProfiles(DlmsClientOptions options, List<string> failures)
-    {
-        if (options.Profiles is null || options.Profiles.Count == 0)
+        public ValidateOptionsResult Validate(string name, DlmsClientOptions options)
         {
-            return;
-        }
-
-        foreach (var (profile, index) in options.Profiles.Select((profile, index) => (profile, index)))
-        {
-            if (IsMissingRequiredFields(profile))
+            var context = new ValidationContext(options);
+            var results = new System.Collections.Generic.List<ValidationResult>();
+            if (!Validator.TryValidateObject(options, context, results, true))
             {
-                failures.Add($"Profiles[{index}] must include both ObisCode and OpcNodeId.");
-                continue;
+                var errors = string.Join(", ", results);
+                return ValidateOptionsResult.Fail(errors);
             }
 
-            MappingProfileDefaults.EnsureDefaults(profile);
-
-            if (!MappingProfileDefaults.HasDataType(profile))
+            if (options.SecuritySuite != Gurux.DLMS.SecuritySuite.None)
             {
-                failures.Add($"Profiles[{index}] must include a supported OPC UA data type (BuiltInType or DataTypeNodeId).");
-            }
-        }
-    }
+                if (string.IsNullOrWhiteSpace(options.BlockCipherKey) || !IsHex(options.BlockCipherKey))
+                {
+                    results.Add(new ValidationResult("BlockCipherKey must be a valid hex string when a security suite is enabled."));
+                }
 
-    private static void ValidateSecurity(DlmsClientOptions options, List<string> failures)
-    {
-        ValidateSecurityMode(options, failures);
+                if (string.IsNullOrWhiteSpace(options.AuthenticationKey) || !IsHex(options.AuthenticationKey))
+                {
+                    results.Add(new ValidationResult("AuthenticationKey must be a valid hex string when a security suite is enabled."));
+                }
 
-        if (options.SecuritySuite != SecuritySuite.Suite0)
-        {
-            ValidateSecureSuiteKeys(options, failures);
-        }
-    }
+                if (string.IsNullOrWhiteSpace(options.SystemTitle) || !IsHex(options.SystemTitle))
+                {
+                    results.Add(new ValidationResult("SystemTitle must be a valid hex string when a security suite is enabled."));
+                }
 
-    private static bool IsHex(string value) =>
-        value.Length % 2 == 0 && value.All(c => IsHexDigit(c));
-
-    private static bool IsHexDigit(char c) =>
-        c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
-
-    private static void ValidateSecurityMode(DlmsClientOptions options, List<string> failures)
-    {
-        var supportedSecureModes = new[] { Security.Authentication, Security.Encryption, Security.AuthenticationEncryption };
-
-        if (options.SecuritySuite == SecuritySuite.Suite0)
-        {
-            if (options.Security != Security.None)
-            {
-                failures.Add($"Security mode {options.Security} is not supported with security suite 0. Use Security.None.");
+                if (options.Security != Gurux.DLMS.Security.AuthenticationEncryption)
+                {
+                    results.Add(new ValidationResult("Security must be AuthenticationEncryption when a security suite is enabled."));
+                }
             }
 
-            return;
+            if (results.Count > 0)
+            {
+                var errors = string.Join(", ", results);
+                return ValidateOptionsResult.Fail(errors);
+            }
+
+            return ValidateOptionsResult.Success;
         }
 
-        if (options.Security == Security.None || !supportedSecureModes.Contains(options.Security))
+        private bool IsHex(string value)
         {
-            failures.Add("Security suite 1 or 2 requires Security to be Authentication, Encryption, or AuthenticationEncryption.");
-        }
-    }
-
-    private static void ValidateSecureSuiteKeys(DlmsClientOptions options, List<string> failures)
-    {
-        if (string.IsNullOrWhiteSpace(options.BlockCipherKey))
-        {
-            failures.Add("BlockCipherKey is required when security suite 1 or 2 is configured.");
-        }
-        else if (!IsHex(options.BlockCipherKey))
-        {
-            failures.Add("BlockCipherKey must be a valid hex string.");
-        }
-
-        if (string.IsNullOrWhiteSpace(options.AuthenticationKey))
-        {
-            failures.Add("AuthenticationKey is required when security suite 1 or 2 is configured.");
-        }
-        else if (!IsHex(options.AuthenticationKey))
-        {
-            failures.Add("AuthenticationKey must be a valid hex string.");
-        }
-
-        if (string.IsNullOrWhiteSpace(options.SystemTitle))
-        {
-            failures.Add("SystemTitle is required when security suite 1 or 2 is configured.");
-        }
-        else if (!IsHex(options.SystemTitle))
-        {
-            failures.Add("SystemTitle must be a valid hex string.");
-        }
-
-        if (string.IsNullOrWhiteSpace(options.InvocationCounterPath))
-        {
-            failures.Add("InvocationCounterPath is required when security suite 1 or 2 is configured.");
+            return value.Length % 2 == 0 && System.Text.RegularExpressions.Regex.IsMatch(value, @"^[0-9a-fA-F]+$");
         }
     }
 }
