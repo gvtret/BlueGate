@@ -10,9 +10,14 @@ namespace BlueGate.Core.Services;
 
 public class BlueGateNodeManager : CustomNodeManager2
 {
+    private readonly object _addressSpaceLock = new();
+    private readonly IServerInternal _server;
     private readonly MappingService _mappingService;
     private readonly DlmsClientService _dlmsClientService;
     private readonly ILogger<BlueGateNodeManager> _logger;
+    private readonly List<NodeId> _managedNodeIds = new();
+    private FolderState? _rootFolder;
+    private ushort? _namespaceIndex;
 
     public const string NamespaceUri = "urn:bluegate:opcua:nodes";
 
@@ -24,10 +29,13 @@ public class BlueGateNodeManager : CustomNodeManager2
         ILogger<BlueGateNodeManager> logger)
         : base(server, configuration, new[] { NamespaceUri })
     {
+        _server = server;
         _mappingService = mappingService;
         _dlmsClientService = dlmsClientService;
         _logger = logger;
         SystemContext.NodeIdFactory = this;
+
+        _mappingService.ProfilesChanged += OnProfilesChanged;
     }
 
     public ushort ServerNamespaceIndex => NamespaceIndexes.FirstOrDefault();
@@ -36,36 +44,15 @@ public class BlueGateNodeManager : CustomNodeManager2
     {
         base.CreateAddressSpace(externalReferences);
 
-        var folderId = new NodeId("BlueGate", ServerNamespaceIndex);
-        var folder = CreateFolder(null, folderId, "BlueGate", "BlueGate", externalReferences);
-        AddPredefinedNode(SystemContext, folder);
-
-        foreach (var profile in _mappingService.GetProfiles())
+        lock (_addressSpaceLock)
         {
-            var parsedNodeId = NodeId.Parse(profile.OpcNodeId);
-            var nodeId = parsedNodeId.NamespaceIndex == ServerNamespaceIndex
-                ? parsedNodeId
-                : new NodeId(parsedNodeId.Identifier, ServerNamespaceIndex);
+            _namespaceIndex ??= ServerNamespaceIndex;
 
-            var identifier = parsedNodeId.Identifier?.ToString() ?? profile.OpcNodeId;
-            var variable = new BaseDataVariableState(folder)
-            {
-                NodeId = nodeId,
-                BrowseName = new QualifiedName(identifier, ServerNamespaceIndex),
-                DisplayName = new LocalizedText(identifier),
-                Description = new LocalizedText($"DLMS OBIS: {profile.ObisCode}"),
-                TypeDefinitionId = VariableTypeIds.BaseDataVariableType,
-                DataType = DataTypeIds.BaseDataType,
-                ValueRank = ValueRanks.Scalar,
-                AccessLevel = AccessLevels.CurrentReadOrWrite,
-                UserAccessLevel = AccessLevels.CurrentReadOrWrite,
-                StatusCode = StatusCodes.Good,
-                Timestamp = DateTime.UtcNow
-            };
+            var folderId = new NodeId("BlueGate", _namespaceIndex.Value);
+            _rootFolder = CreateFolder(null, folderId, "BlueGate", "BlueGate", externalReferences);
+            AddPredefinedNode(SystemContext, _rootFolder);
 
-            variable.OnSimpleWriteValue = OnWriteValue;
-
-            AddPredefinedNode(SystemContext, variable);
+            RebuildNodes(_server.DefaultSystemContext);
         }
     }
 
@@ -109,7 +96,7 @@ public class BlueGateNodeManager : CustomNodeManager2
         var folder = new FolderState(parent)
         {
             NodeId = nodeId,
-            BrowseName = new QualifiedName(browseName, ServerNamespaceIndex),
+            BrowseName = new QualifiedName(browseName, _namespaceIndex ?? ServerNamespaceIndex),
             DisplayName = new LocalizedText(displayName),
             TypeDefinitionId = ObjectTypeIds.FolderType,
             EventNotifier = EventNotifiers.None
@@ -138,5 +125,59 @@ public class BlueGateNodeManager : CustomNodeManager2
         }
 
         references.Add(new NodeStateReference(referenceTypeId, isInverse, targetId));
+    }
+
+    private void OnProfilesChanged(object? sender, EventArgs e)
+    {
+        if (!_server.IsRunning || _rootFolder == null)
+            return;
+
+        lock (_addressSpaceLock)
+        {
+            RebuildNodes(_server.DefaultSystemContext);
+        }
+    }
+
+    private void RebuildNodes(ServerSystemContext context)
+    {
+        if (_rootFolder == null)
+            return;
+
+        foreach (var nodeId in _managedNodeIds)
+        {
+            DeleteNode(context, nodeId);
+        }
+
+        _managedNodeIds.Clear();
+
+        foreach (var profile in _mappingService.GetProfiles())
+        {
+            var parsedNodeId = NodeId.Parse(profile.OpcNodeId);
+            var namespaceIndex = _namespaceIndex ?? parsedNodeId.NamespaceIndex;
+            var nodeId = parsedNodeId.NamespaceIndex == namespaceIndex
+                ? parsedNodeId
+                : new NodeId(parsedNodeId.Identifier, namespaceIndex);
+
+            var identifier = parsedNodeId.Identifier?.ToString() ?? profile.OpcNodeId;
+            var variable = new BaseDataVariableState(_rootFolder)
+            {
+                NodeId = nodeId,
+                BrowseName = new QualifiedName(identifier, namespaceIndex),
+                DisplayName = new LocalizedText(identifier),
+                Description = new LocalizedText($"DLMS OBIS: {profile.ObisCode}"),
+                TypeDefinitionId = VariableTypeIds.BaseDataVariableType,
+                DataType = DataTypeIds.BaseDataType,
+                ValueRank = ValueRanks.Scalar,
+                AccessLevel = AccessLevels.CurrentReadOrWrite,
+                UserAccessLevel = AccessLevels.CurrentReadOrWrite,
+                StatusCode = StatusCodes.Good,
+                Timestamp = DateTime.UtcNow
+            };
+
+            variable.OnSimpleWriteValue = OnWriteValue;
+
+            AddPredefinedNode(context, variable);
+            _managedNodeIds.Add(variable.NodeId);
+        }
     }
 }
