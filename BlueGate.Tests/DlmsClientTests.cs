@@ -18,9 +18,11 @@ public class DlmsClientTests
         };
 
         var options = Options.Create(new DlmsClientOptions());
+        var mappingService = new MappingService(options);
         var client = new DlmsClientService(
             options,
             new FakeDlmsTransport(new[] { expected }),
+            mappingService,
             NullLogger<DlmsClientService>.Instance);
 
         var data = await client.ReadAllAsync();
@@ -43,12 +45,14 @@ internal sealed class FakeDlmsTransport : IDlmsTransport
 
     public Task<IEnumerable<CosemObject>> ReadAllAsync(
         DlmsClientOptions options,
+        IEnumerable<MappingProfile> profiles,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(_objects);
 
     public Task WriteAsync(
         DlmsClientOptions options,
         string obisCode,
+        IEnumerable<MappingProfile> profiles,
         object value,
         CancellationToken cancellationToken = default) =>
         Task.CompletedTask;
