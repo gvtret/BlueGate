@@ -4,10 +4,12 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Opc.Ua;
 using Opc.Ua.Configuration;
 using Opc.Ua.Server;
 using BlueGate.Core.Models;
+using BlueGate.Core.Configuration;
 
 namespace BlueGate.Core.Services;
 
@@ -18,13 +20,19 @@ public class OpcUaServerService : IAsyncDisposable
     private readonly MappingService _mappingService;
     private readonly DlmsClientService _dlmsClientService;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly OpcUaOptions _opcUaOptions;
     private ushort? _namespaceIndex;
 
-    public OpcUaServerService(MappingService mappingService, DlmsClientService dlmsClientService, ILoggerFactory loggerFactory)
+    public OpcUaServerService(
+        MappingService mappingService,
+        DlmsClientService dlmsClientService,
+        ILoggerFactory loggerFactory,
+        IOptions<OpcUaOptions> opcUaOptions)
     {
         _mappingService = mappingService;
         _dlmsClientService = dlmsClientService;
         _loggerFactory = loggerFactory;
+        _opcUaOptions = opcUaOptions.Value;
     }
 
     public async Task StartAsync()
@@ -49,7 +57,8 @@ public class OpcUaServerService : IAsyncDisposable
             }
         };
 
-        await _application.CheckApplicationInstanceCertificatesAsync(true, null, CancellationToken.None);
+        var minimumKeySize = GetMinimumKeySize();
+        await _application.CheckApplicationInstanceCertificatesAsync(false, minimumKeySize, CancellationToken.None);
 
         _server = new BlueGateServer(_mappingService, _dlmsClientService, _loggerFactory);
         await _application.StartAsync(_server);
@@ -100,29 +109,23 @@ public class OpcUaServerService : IAsyncDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static async Task<ApplicationConfiguration> LoadOrCreateConfigurationAsync(ApplicationInstance application)
+    private Task<ApplicationConfiguration> LoadOrCreateConfigurationAsync(ApplicationInstance application)
     {
-        try
-        {
-            return await application.LoadApplicationConfigurationAsync(silent: false);
-        }
-        catch (Exception ex) when (ex is FileNotFoundException || ex is ServiceResultException)
-        {
-            Console.WriteLine("⚠️ No OPC UA configuration file found. Building configuration programmatically...");
-            return BuildConfiguration(application.ApplicationName);
-        }
+        Console.WriteLine("⚙️ Building OPC UA configuration from application settings...");
+        return Task.FromResult(BuildConfiguration(application.ApplicationName));
     }
 
-    private static ApplicationConfiguration BuildConfiguration(string applicationName)
+    private ApplicationConfiguration BuildConfiguration(string applicationName)
     {
         var applicationUri = Utils.Format("urn:{0}:{1}", Utils.GetHostName(), applicationName);
-        var subjectName = Utils.Format("CN={0}, DC={1}", applicationName, Utils.GetHostName());
+        var subjectName = _opcUaOptions.ApplicationSubjectName
+            ?? Utils.Format("CN={0}, DC={1}", applicationName, Utils.GetHostName());
         var baseDirectory = AppContext.BaseDirectory;
 
-        var applicationStorePath = Path.GetFullPath(Path.Combine(baseDirectory, "pki", "own"));
-        var trustedPeerStorePath = Path.GetFullPath(Path.Combine(baseDirectory, "pki", "trusted"));
-        var trustedIssuerStorePath = Path.GetFullPath(Path.Combine(baseDirectory, "pki", "issuers"));
-        var rejectedStorePath = Path.GetFullPath(Path.Combine(baseDirectory, "pki", "rejected"));
+        var applicationStorePath = ResolveStorePath(_opcUaOptions.CertificateStores.ApplicationStore.StorePath, baseDirectory, "pki/own");
+        var trustedPeerStorePath = ResolveStorePath(_opcUaOptions.CertificateStores.TrustedPeerStore.StorePath, baseDirectory, "pki/trusted");
+        var trustedIssuerStorePath = ResolveStorePath(_opcUaOptions.CertificateStores.TrustedIssuerStore.StorePath, baseDirectory, "pki/issuers");
+        var rejectedStorePath = ResolveStorePath(_opcUaOptions.CertificateStores.RejectedStore.StorePath, baseDirectory, "pki/rejected");
 
         Directory.CreateDirectory(applicationStorePath);
         Directory.CreateDirectory(trustedPeerStorePath);
@@ -133,47 +136,31 @@ public class OpcUaServerService : IAsyncDisposable
         {
             ApplicationCertificate = new CertificateIdentifier
             {
-                StoreType = CertificateStoreType.Directory,
+                StoreType = _opcUaOptions.CertificateStores.ApplicationStore.StoreType,
                 StorePath = applicationStorePath,
                 SubjectName = subjectName
             },
             TrustedPeerCertificates = new CertificateTrustList
             {
-                StoreType = CertificateStoreType.Directory,
+                StoreType = _opcUaOptions.CertificateStores.TrustedPeerStore.StoreType,
                 StorePath = trustedPeerStorePath
             },
             TrustedIssuerCertificates = new CertificateTrustList
             {
-                StoreType = CertificateStoreType.Directory,
+                StoreType = _opcUaOptions.CertificateStores.TrustedIssuerStore.StoreType,
                 StorePath = trustedIssuerStorePath
             },
             RejectedCertificateStore = new CertificateTrustList
             {
-                StoreType = CertificateStoreType.Directory,
+                StoreType = _opcUaOptions.CertificateStores.RejectedStore.StoreType,
                 StorePath = rejectedStorePath
             },
-            AutoAcceptUntrustedCertificates = true,
-            AddAppCertToTrustedStore = true
+            AutoAcceptUntrustedCertificates = _opcUaOptions.AutoAcceptUntrustedCertificates,
+            AddAppCertToTrustedStore = _opcUaOptions.AddApplicationCertificateToTrustedStore,
+            MinimumCertificateKeySize = GetMinimumKeySize()
         };
 
-        var baseAddress = Utils.Format("opc.tcp://{0}:4840/BlueGate", Utils.GetHostName());
-
-        var serverConfiguration = new ServerConfiguration
-        {
-            BaseAddresses =
-            {
-                baseAddress,
-                "opc.tcp://localhost:4840/BlueGate"
-            },
-            SecurityPolicies =
-            {
-                new ServerSecurityPolicy
-                {
-                    SecurityMode = MessageSecurityMode.None,
-                    SecurityPolicyUri = SecurityPolicies.None
-                }
-            }
-        };
+        var serverConfiguration = BuildServerConfiguration();
 
         var config = new ApplicationConfiguration
         {
@@ -193,7 +180,139 @@ public class OpcUaServerService : IAsyncDisposable
             }
         };
 
+        config.CertificateValidator.UpdateAsync(config)
+            .GetAwaiter()
+            .GetResult();
+
         return config;
+    }
+
+    private ServerConfiguration BuildServerConfiguration()
+    {
+        var baseAddress = Utils.Format("opc.tcp://{0}:4840/BlueGate", Utils.GetHostName());
+        var baseAddresses = _opcUaOptions.BaseAddresses?.Count > 0
+            ? _opcUaOptions.BaseAddresses
+            : new[] { baseAddress, "opc.tcp://localhost:4840/BlueGate" };
+
+        var configuredPolicies = _opcUaOptions.SecurityPolicies?.Count > 0
+            ? _opcUaOptions.SecurityPolicies.ToList()
+            : new List<OpcUaSecurityPolicyOptions>
+            {
+                new()
+                {
+                    SecurityMode = MessageSecurityMode.SignAndEncrypt,
+                    SecurityPolicy = SecurityPolicies.Basic256Sha256
+                },
+                new()
+                {
+                    SecurityMode = MessageSecurityMode.Sign,
+                    SecurityPolicy = SecurityPolicies.Basic128Rsa15
+                }
+            };
+
+        if (configuredPolicies.All(p => p.SecurityMode == MessageSecurityMode.None))
+        {
+            configuredPolicies.Add(new OpcUaSecurityPolicyOptions
+            {
+                SecurityMode = MessageSecurityMode.SignAndEncrypt,
+                SecurityPolicy = SecurityPolicies.Basic256Sha256
+            });
+        }
+
+        var securityPolicies = new ServerSecurityPolicyCollection(
+            configuredPolicies.Select(p => new ServerSecurityPolicy
+            {
+                SecurityMode = p.SecurityMode,
+                SecurityPolicyUri = string.IsNullOrWhiteSpace(p.SecurityPolicy)
+                    ? SecurityPolicies.Basic256Sha256
+                    : p.SecurityPolicy
+            }));
+
+        var userTokenPolicies = BuildUserTokenPolicies();
+
+        var serverConfiguration = new ServerConfiguration();
+        foreach (var address in baseAddresses)
+        {
+            serverConfiguration.BaseAddresses.Add(address);
+        }
+
+        foreach (var policy in securityPolicies)
+        {
+            serverConfiguration.SecurityPolicies.Add(policy);
+        }
+
+        foreach (var tokenPolicy in userTokenPolicies)
+        {
+            serverConfiguration.UserTokenPolicies.Add(tokenPolicy);
+        }
+
+        return serverConfiguration;
+    }
+
+    private IEnumerable<UserTokenPolicy> BuildUserTokenPolicies()
+    {
+        var configuredPolicies = _opcUaOptions.UserTokenPolicies?.Count > 0
+            ? _opcUaOptions.UserTokenPolicies
+            : new List<UserTokenPolicyOptions>
+            {
+                new()
+                {
+                    PolicyId = "anonymous",
+                    TokenType = UserTokenType.Anonymous,
+                    SecurityPolicy = SecurityPolicies.None
+                },
+                new()
+                {
+                    PolicyId = "username",
+                    TokenType = UserTokenType.UserName,
+                    SecurityPolicy = SecurityPolicies.Basic256Sha256
+                }
+            };
+
+        return configuredPolicies.Select(p => new UserTokenPolicy
+        {
+            PolicyId = string.IsNullOrWhiteSpace(p.PolicyId) ? p.TokenType.ToString() : p.PolicyId,
+            TokenType = p.TokenType,
+            SecurityPolicyUri = string.IsNullOrWhiteSpace(p.SecurityPolicy)
+                ? SecurityPolicies.None
+                : p.SecurityPolicy
+        });
+    }
+
+    private static string ResolveStorePath(string path, string baseDirectory, string defaultRelative)
+    {
+        var storePath = string.IsNullOrWhiteSpace(path) ? defaultRelative : path;
+        return Path.IsPathRooted(storePath)
+            ? storePath
+            : Path.GetFullPath(Path.Combine(baseDirectory, storePath));
+    }
+
+    private ushort GetMinimumKeySize()
+    {
+        if (_opcUaOptions.MinimumCertificateKeySize.HasValue)
+        {
+            return (ushort)Math.Min(ushort.MaxValue, _opcUaOptions.MinimumCertificateKeySize.Value);
+        }
+
+        var policies = _opcUaOptions.SecurityPolicies?.Count > 0
+            ? _opcUaOptions.SecurityPolicies
+            : new List<OpcUaSecurityPolicyOptions>
+            {
+                new()
+                {
+                    SecurityMode = MessageSecurityMode.SignAndEncrypt,
+                    SecurityPolicy = SecurityPolicies.Basic256Sha256
+                },
+                new()
+                {
+                    SecurityMode = MessageSecurityMode.Sign,
+                    SecurityPolicy = SecurityPolicies.Basic128Rsa15
+                }
+            };
+
+        return policies.Any(p => p.SecurityPolicy == SecurityPolicies.Basic256Sha256)
+            ? (ushort)2048
+            : (ushort)1024;
     }
 
     public async Task UpdateNodeAsync(OpcUaNode node)
