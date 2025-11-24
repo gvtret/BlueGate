@@ -8,20 +8,20 @@ namespace BlueGate.Core.Services;
 
 public class DlmsClientService
 {
-    private readonly DlmsClientOptions _options;
+    private readonly IOptionsMonitor<DlmsClientOptions> _optionsMonitor;
     private readonly IDlmsTransport _transport;
-    private readonly IReadOnlyCollection<MappingProfile> _profiles;
+    private readonly MappingService _mappingService;
     private readonly ILogger<DlmsClientService> _logger;
 
     public DlmsClientService(
-        IOptions<DlmsClientOptions> options,
+        IOptionsMonitor<DlmsClientOptions> options,
         IDlmsTransport transport,
         MappingService mappingService,
         ILogger<DlmsClientService> logger)
     {
-        _options = options.Value;
+        _optionsMonitor = options;
         _transport = transport;
-        _profiles = mappingService.GetProfiles();
+        _mappingService = mappingService;
         _logger = logger;
     }
 
@@ -29,7 +29,10 @@ public class DlmsClientService
     {
         try
         {
-            return await _transport.ReadAllAsync(_options, _profiles, cancellationToken).ConfigureAwait(false);
+            var options = _optionsMonitor.CurrentValue;
+            var profiles = _mappingService.GetProfiles();
+
+            return await _transport.ReadAllAsync(options, profiles, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -42,7 +45,10 @@ public class DlmsClientService
     {
         try
         {
-            await _transport.WriteAsync(_options, obisCode, _profiles, value, cancellationToken).ConfigureAwait(false);
+            var options = _optionsMonitor.CurrentValue;
+            var profiles = _mappingService.GetProfiles();
+
+            await _transport.WriteAsync(options, obisCode, profiles, value, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
