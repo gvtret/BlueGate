@@ -97,6 +97,9 @@ public class MappingService
         var validProfiles = profiles
             .Where(profile => !string.IsNullOrWhiteSpace(profile.ObisCode)
                               && !string.IsNullOrWhiteSpace(profile.OpcNodeId))
+            .Select(profile => ApplyDefaults(profile))
+            .Where(profile => profile is not null)
+            .Cast<MappingProfile>()
             .ToList();
 
         if (validProfiles.Count == 0)
@@ -104,8 +107,24 @@ public class MappingService
             _logger.LogInformation(
                 "No mapping profiles configured or all were invalid. Applying defaults for DLMS to OPC UA mapping.");
             validProfiles.AddRange(DlmsClientOptions.DefaultProfiles);
+            foreach (var profile in validProfiles)
+            {
+                MappingProfileDefaults.EnsureDefaults(profile);
+            }
         }
 
         return validProfiles;
+    }
+
+    private MappingProfile? ApplyDefaults(MappingProfile profile)
+    {
+        if (!MappingProfileDefaults.EnsureDefaults(profile))
+        {
+            _logger.LogWarning("Profile for OBIS {ObisCode} has no supported OPC UA data type configured and will be ignored.",
+                profile.ObisCode);
+            return null;
+        }
+
+        return profile;
     }
 }
