@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Collections.Generic;
 using BlueGate.Core.Models;
+using Gurux.DLMS.Enums;
 using Gurux.DLMS.Objects.Enums;
 using Microsoft.Extensions.Options;
 
@@ -52,11 +53,42 @@ public class DlmsClientOptionsValidator : IValidateOptions<DlmsClientOptions>
 
     private static void ValidateSecurity(DlmsClientOptions options, List<string> failures)
     {
+        ValidateSecurityMode(options, failures);
+
+        if (options.SecuritySuite != SecuritySuite.Suite0)
+        {
+            ValidateSecureSuiteKeys(options, failures);
+        }
+    }
+
+    private static bool IsHex(string value) =>
+        value.Length % 2 == 0 && value.All(c => IsHexDigit(c));
+
+    private static bool IsHexDigit(char c) =>
+        c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
+
+    private static void ValidateSecurityMode(DlmsClientOptions options, List<string> failures)
+    {
+        var supportedSecureModes = new[] { Security.Authentication, Security.Encryption, Security.AuthenticationEncryption };
+
         if (options.SecuritySuite == SecuritySuite.Suite0)
         {
+            if (options.Security != Security.None)
+            {
+                failures.Add($"Security mode {options.Security} is not supported with security suite 0. Use Security.None.");
+            }
+
             return;
         }
 
+        if (options.Security == Security.None || !supportedSecureModes.Contains(options.Security))
+        {
+            failures.Add("Security suite 1 or 2 requires Security to be Authentication, Encryption, or AuthenticationEncryption.");
+        }
+    }
+
+    private static void ValidateSecureSuiteKeys(DlmsClientOptions options, List<string> failures)
+    {
         if (string.IsNullOrWhiteSpace(options.BlockCipherKey))
         {
             failures.Add("BlockCipherKey is required when security suite 1 or 2 is configured.");
@@ -89,10 +121,4 @@ public class DlmsClientOptionsValidator : IValidateOptions<DlmsClientOptions>
             failures.Add("InvocationCounterPath is required when security suite 1 or 2 is configured.");
         }
     }
-
-    private static bool IsHex(string value) =>
-        value.Length % 2 == 0 && value.All(c => IsHexDigit(c));
-
-    private static bool IsHexDigit(char c) =>
-        c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
 }

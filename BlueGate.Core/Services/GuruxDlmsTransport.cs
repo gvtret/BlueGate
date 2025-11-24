@@ -335,9 +335,7 @@ public class GuruxDlmsTransport : IDlmsTransport
         var ciphering = GetCiphering(client) ?? new GXCiphering();
 
         ciphering.SecuritySuite = options.SecuritySuite;
-        ciphering.Security = options.SecuritySuite == SecuritySuite.Suite0
-            ? Security.None
-            : Security.AuthenticationEncryption;
+        ciphering.Security = options.Security;
         ciphering.BlockCipherKey = ParseOptionalHex(options.BlockCipherKey);
         ciphering.AuthenticationKey = ParseOptionalHex(options.AuthenticationKey);
         ciphering.SystemTitle = ParseOptionalHex(options.SystemTitle);
