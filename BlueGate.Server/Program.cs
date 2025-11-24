@@ -22,6 +22,9 @@ builder.Services.AddOptions<DlmsClientOptions>()
     .Bind(builder.Configuration.GetSection("DlmsClient"))
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<DlmsClientOptions>, DlmsClientOptionsValidator>();
+builder.Services.AddOptions<OpcUaOptions>()
+    .Bind(builder.Configuration.GetSection("OpcUa"))
+    .ValidateOnStart();
 builder.Services.AddSingleton<IDlmsTransport, GuruxDlmsTransport>();
 builder.Services.AddSingleton<DlmsClientService>();
 builder.Services.AddSingleton<OpcUaServerService>();
