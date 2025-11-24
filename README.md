@@ -26,7 +26,7 @@ BlueGate is a high-performance, cross-platform industrial data gateway that brid
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourname/BlueGate.git
+git clone https://github.com/gvtret/BlueGate.git
 cd BlueGate
 
 # Restore dependencies
