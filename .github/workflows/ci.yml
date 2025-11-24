@@ -63,6 +63,10 @@ jobs:
         shell: powershell
         run: choco install -y doxygen.install graphviz
 
+      - name: Prepare docs output directory (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: mkdir -p docs/doxygen
+
       - name: Generate documentation
         if: matrix.os == 'ubuntu-latest'
         run: doxygen Doxyfile
