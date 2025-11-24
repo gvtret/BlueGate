@@ -11,7 +11,7 @@ using BlueGate.Core.Models;
 
 namespace BlueGate.Core.Services;
 
-public class OpcUaServerService
+public class OpcUaServerService : IAsyncDisposable
 {
     private ApplicationInstance? _application;
     private BlueGateServer? _server;
@@ -60,6 +60,44 @@ public class OpcUaServerService
             ?? "opc.tcp://localhost:4840/BlueGate";
 
         Console.WriteLine($"✅ OPC UA Server started at: {endpoint}");
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        if (_application != null)
+        {
+            var stopAsyncMethod = _application
+                .GetType()
+                .GetMethod("StopAsync", new[] { typeof(CancellationToken) });
+
+            if (stopAsyncMethod?.Invoke(_application, new object[] { cancellationToken }) is Task stopTask)
+            {
+                await stopTask.ConfigureAwait(false);
+            }
+            else
+            {
+                _application.Stop();
+            }
+        }
+
+        if (_server is IAsyncDisposable asyncDisposableServer)
+        {
+            await asyncDisposableServer.DisposeAsync().ConfigureAwait(false);
+        }
+        else
+        {
+            (_server as IDisposable)?.Dispose();
+        }
+
+        _namespaceIndex = null;
+        _server = null;
+        _application = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync().ConfigureAwait(false);
+        GC.SuppressFinalize(this);
     }
 
     private static async Task<ApplicationConfiguration> LoadOrCreateConfigurationAsync(ApplicationInstance application)
