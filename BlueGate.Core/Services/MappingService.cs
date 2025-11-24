@@ -19,4 +19,6 @@ public class MappingService
 
     public string? MapToDlms(string nodeId)
         => _profiles.FirstOrDefault(m => m.OpcNodeId == nodeId)?.ObisCode;
+
+    public IReadOnlyCollection<MappingProfile> GetProfiles() => _profiles.AsReadOnly();
 }

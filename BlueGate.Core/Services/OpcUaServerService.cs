@@ -13,7 +13,14 @@ namespace BlueGate.Core.Services;
 public class OpcUaServerService
 {
     private ApplicationInstance? _application;
-    private StandardServer? _server;
+    private BlueGateServer? _server;
+    private readonly MappingService _mappingService;
+    private ushort? _namespaceIndex;
+
+    public OpcUaServerService(MappingService mappingService)
+    {
+        _mappingService = mappingService;
+    }
 
     public async Task StartAsync()
     {
@@ -39,8 +46,10 @@ public class OpcUaServerService
 
         await _application.CheckApplicationInstanceCertificatesAsync(true, null, CancellationToken.None);
 
-        _server = new StandardServer();
+        _server = new BlueGateServer(_mappingService);
         await _application.StartAsync(_server);
+
+        _namespaceIndex = _server.NodeManager?.ServerNamespaceIndex;
 
         var endpoint = config.ServerConfiguration.BaseAddresses.FirstOrDefault()
             ?? "opc.tcp://localhost:4840/BlueGate";
@@ -151,7 +160,11 @@ public class OpcUaServerService
 
         try
         {
-            var nodeId = new NodeId(node.NodeId);
+            var parsedNodeId = NodeId.Parse(node.NodeId);
+            var namespaceIndex = _namespaceIndex ?? parsedNodeId.NamespaceIndex;
+            var nodeId = parsedNodeId.NamespaceIndex == namespaceIndex
+                ? parsedNodeId
+                : new NodeId(parsedNodeId.Identifier, namespaceIndex);
             var value = new DataValue(new Variant(node.Value))
             {
                 ServerTimestamp = DateTime.UtcNow
