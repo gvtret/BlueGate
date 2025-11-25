@@ -1,51 +1,70 @@
-namespace BlueGate.Core.Services;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
-public class ConversionEngine
+namespace BlueGate.Core.Services
 {
-    private readonly DlmsClientService _dlms;
-    private readonly OpcUaServerService _opcua;
-    private readonly MappingService _mapper;
-
-    public ConversionEngine(DlmsClientService dlms, OpcUaServerService opcua, MappingService mapper)
+    /// <summary>
+    /// Orchestrates the bidirectional synchronization between DLMS and OPC UA services.
+    /// </summary>
+    public class ConversionEngine
     {
-        _dlms = dlms;
-        _opcua = opcua;
-        _mapper = mapper;
-    }
+        private readonly DlmsClientService _dlmsClient;
+        private readonly OpcUaServerService _opcUaServer;
+        private readonly MappingService _mappingService;
+        private readonly ILogger<ConversionEngine> _logger;
 
-    public async Task SyncLoopAsync(CancellationToken token)
-    {
-        await _opcua.StartAsync();
-
-        try
+        public ConversionEngine(
+            DlmsClientService dlmsClient,
+            OpcUaServerService opcUaServer,
+            MappingService mappingService,
+            ILogger<ConversionEngine> logger)
         {
-            while (!token.IsCancellationRequested)
+            _dlmsClient = dlmsClient;
+            _opcUaServer = opcUaServer;
+            _mappingService = mappingService;
+            _logger = logger;
+        }
+
+        /// <summary>
+        /// Starts the main synchronization loop.
+        /// </summary>
+        public async Task SyncLoopAsync(CancellationToken stoppingToken)
+        {
+            _logger.LogInformation("Engine started. Entering main sync loop...");
+            await _opcUaServer.StartAsync();
+
+            while (!stoppingToken.IsCancellationRequested)
             {
-                var cosemObjects = await _dlms.ReadAllAsync(token);
-
-                foreach (var obj in cosemObjects)
+                try
                 {
-                    var nodeId = _mapper.MapToOpcUa(obj.ObisCode);
-                    if (nodeId is not null)
-                        await _opcua.UpdateNodeAsync(new Models.OpcUaNode
+                    var dlmsData = await _dlmsClient.ReadAllObjectsAsync();
+                    foreach (var profile in _mappingService.GetObisProfiles())
+                    {
+                        if (dlmsData.TryGetValue(profile.ObisCode, out var value))
                         {
-                            NodeId = nodeId,
-                            Value = obj.Value,
-                            LastUpdate = DateTime.UtcNow
-                        });
-                }
+                            _opcUaServer.UpdateNodeValue(profile.OpcNodeId, value, profile.BuiltInType);
+                        }
+                    }
 
-                await Task.Delay(TimeSpan.FromSeconds(10), token);
+                    await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "An error occurred during the sync loop.");
+                    await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); // Wait before retrying
+                }
             }
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+
+        /// <summary>
+        /// Gracefully stops the engine.
+        /// </summary>
+        public async Task StopAsync(CancellationToken cancellationToken)
         {
-        }
-        finally
-        {
-            await StopAsync(CancellationToken.None);
+            _logger.LogInformation("Engine is stopping...");
+            await _opcUaServer.StopAsync();
         }
     }
-
-    public Task StopAsync(CancellationToken cancellationToken = default) => _opcua.StopAsync(cancellationToken);
 }

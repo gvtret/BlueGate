@@ -1,19 +1,14 @@
-using BlueGate.Core.Configuration;
-using BlueGate.Core.Models;
+using System;
+using System.Threading.Tasks;
+using Gurux.DLMS.Client;
 
-namespace BlueGate.Core.Services;
-
-public interface IDlmsTransport
+namespace BlueGate.Core.Services
 {
-    Task<IEnumerable<CosemObject>> ReadAllAsync(
-        DlmsClientOptions options,
-        IEnumerable<MappingProfile> profiles,
-        CancellationToken cancellationToken = default);
-
-    Task WriteAsync(
-        DlmsClientOptions options,
-        string obisCode,
-        IEnumerable<MappingProfile> profiles,
-        object value,
-        CancellationToken cancellationToken = default);
+    public interface IDlmsTransport : IDisposable
+    {
+        bool IsOpen { get; }
+        GXDLMSClient Client { get; }
+        Task ConnectAsync();
+        Task DisconnectAsync();
+    }
 }

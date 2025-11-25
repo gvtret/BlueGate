@@ -1,76 +1,35 @@
-using BlueGate.Core.Models;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using Gurux.DLMS;
 using Gurux.DLMS.Enums;
-using Gurux.DLMS.Objects.Enums;
-using Opc.Ua;
 
-namespace BlueGate.Core.Configuration;
-
-/// <summary>
-/// DLMS transport and authentication settings provided via configuration binding.
-/// </summary>
-public class DlmsClientOptions
+namespace BlueGate.Core.Configuration
 {
-    /// <summary>DLMS server host name or IP.</summary>
-    public string Host { get; set; } = "192.168.1.10";
 
-    /// <summary>DLMS server TCP port.</summary>
-    public int Port { get; set; } = 4059;
-
-    /// <summary>Client address configured on the meter.</summary>
-    public int ClientAddress { get; set; } = 16;
-
-    /// <summary>Server address configured on the meter.</summary>
-    public int ServerAddress { get; set; } = 1;
-
-    /// <summary>Authentication mechanism to use.</summary>
-    public Authentication Authentication { get; set; } = Authentication.None;
-
-    /// <summary>Security mode used when establishing an association.</summary>
-    public Security Security { get; set; } = Security.None;
-
-    /// <summary>Password or shared secret for authentication.</summary>
-    public string? Password { get; set; }
-
-    /// <summary>Security suite used for DLMS/COSEM ciphering.</summary>
-    public SecuritySuite SecuritySuite { get; set; } = SecuritySuite.Suite0;
-
-    /// <summary>Hex-encoded block cipher key for secured associations.</summary>
-    public string? BlockCipherKey { get; set; }
-
-    /// <summary>Hex-encoded authentication key for secured associations.</summary>
-    public string? AuthenticationKey { get; set; }
-
-    /// <summary>Hex-encoded client system title.</summary>
-    public string? SystemTitle { get; set; }
-
-    /// <summary>Path to a persisted invocation counter value.</summary>
-    public string? InvocationCounterPath { get; set; }
-
-    /// <summary>Interface type for the media (HDLC/TCP-UDP).</summary>
-    public InterfaceType InterfaceType { get; set; } = InterfaceType.HDLC;
-
-    /// <summary>How long to wait for replies (milliseconds).</summary>
-    public int WaitTime { get; set; } = 5000;
-
-    /// <summary>How many data chunks to read at once.</summary>
-    public int ReceiveCount { get; set; } = 1;
-
-    /// <summary>Collection of DLMS to OPC UA mapping profiles to read/write.</summary>
-    public List<MappingProfile> Profiles { get; set; } = CreateDefaultProfiles();
-
-    /// <summary>Default mapping profiles used when configuration does not specify any.</summary>
-    public static IReadOnlyCollection<MappingProfile> DefaultProfiles { get; } = CreateDefaultProfiles();
-
-    private static List<MappingProfile> CreateDefaultProfiles() => new()
+    public class DlmsClientOptions
     {
-        new()
-        {
-            ObisCode = "1.0.1.8.0.255",
-            OpcNodeId = "ns=2;s=ActiveEnergy",
-            ObjectType = ObjectType.Register,
-            AttributeIndex = 2,
-            BuiltInType = BuiltInType.Double,
-            InitialValue = 0d
-        }
-    };
+        [Required]
+        public string Host { get; set; } = "localhost";
+
+        [Range(1, 65535)]
+        public int Port { get; set; } = 4059;
+
+        public int ClientAddress { get; set; } = 16;
+        public int ServerAddress { get; set; } = 1;
+
+        public Authentication Authentication { get; set; } = Authentication.None;
+        public string Password { get; set; }
+        public Security Security { get; set; } = Security.None;
+        public SecuritySuite SecuritySuite { get; set; } = SecuritySuite.None;
+        public string BlockCipherKey { get; set; }
+        public string AuthenticationKey { get; set; }
+        public string SystemTitle { get; set; }
+        public long? InvocationCounter { get; set; }
+        public string InvocationCounterPath { get; set; } = "invocationCounter.txt";
+        public Gurux.Communication.InterfaceType InterfaceType { get; set; } = Gurux.Communication.InterfaceType.HDLC;
+        public int WaitTime { get; set; } = 5000;
+        public int ReceiveCount { get; set; }
+        public List<ObisMappingProfile> Profiles { get; set; } = new();
+    }
 }
